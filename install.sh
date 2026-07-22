@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # فقط این مقدار را یک‌بار با نام کاربری و نام ریپوی خودت عوض کن.
-GITHUB_REPO="YOUR_GITHUB_USERNAME/YOUR_REPOSITORY"
+GITHUB_REPO="V2grop/backhaul-oneclick"
 BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${BRANCH}"
 
