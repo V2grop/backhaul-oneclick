@@ -254,6 +254,8 @@ source_install() {
     local go_urls=()
     [[ -n "${V2QUANTUM_GO_URL:-}" ]] && go_urls+=("$V2QUANTUM_GO_URL")
     go_urls+=(
+      "https://mirrors.aliyun.com/golang/go$GO_VERSION.linux-$ARCH.tar.gz"
+      "https://golang.google.cn/dl/go$GO_VERSION.linux-$ARCH.tar.gz"
       "https://go.dev/dl/go$GO_VERSION.linux-$ARCH.tar.gz"
       "https://dl.google.com/go/go$GO_VERSION.linux-$ARCH.tar.gz"
       "https://storage.googleapis.com/golang/go$GO_VERSION.linux-$ARCH.tar.gz"
@@ -268,7 +270,7 @@ source_install() {
       fi
       warn "This Go download source failed; trying the next verified source."
     done
-    [[ "$verified" == true ]] || die "Could not download a verified Go $GO_VERSION toolchain. Use a published V2Quantum release or set V2QUANTUM_GO_URL to an authorized mirror."
+    [[ "$verified" == true ]] || die "Could not download a verified Go $GO_VERSION toolchain. Use a published V2Quantum release or set V2QUANTUM_GO_URL to another authorized mirror."
     tar -xzf "$TMP_DIR/go.tar.gz" -C "$TMP_DIR"
     go_bin="$TMP_DIR/go/bin/go"
   fi

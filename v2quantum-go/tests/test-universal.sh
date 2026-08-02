@@ -107,6 +107,8 @@ grep -q 'v2quantum' "$TMP_DIR/status.txt"
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --capabilities >"$TMP_DIR/capabilities.txt"
 grep -q 'Pengu and Dagger licensed binaries are not bundled' "$TMP_DIR/capabilities.txt"
 grep -q 'quantum_udp is the carrier' "$TMP_DIR/capabilities.txt"
+grep -q 'mirrors.aliyun.com/golang' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
+grep -q 'golang.google.cn/dl' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --install-shortcut >/dev/null
 test -x "$SHORTCUT"
@@ -114,8 +116,17 @@ env "${COMMON_ENV[@]}" bash "$LAUNCHER" --remove-shortcut -y >/dev/null
 test ! -e "$SHORTCUT"
 
 printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
-grep -q 'Backhaul - all transports including TUN' "$TMP_DIR/menu.txt"
-grep -q 'V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
-grep -q 'Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
+grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
+grep -q '2) V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
+grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
+if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
+  echo "XWSMUX Max is still duplicated in the top-level menu" >&2
+  exit 1
+fi
+
+printf '1\n0\n0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/backhaul-menu.txt"
+grep -q 'Backhaul family' "$TMP_DIR/backhaul-menu.txt"
+grep -q '1) Standard manager - all transports including TUN' "$TMP_DIR/backhaul-menu.txt"
+grep -q '2) XWSMUX Max - optimized Cloudflare profile' "$TMP_DIR/backhaul-menu.txt"
 
 echo "universal launcher tests passed"

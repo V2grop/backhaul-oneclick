@@ -12,7 +12,8 @@ Public command after this branch is merged into `main`:
 bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/oneclick-universal.sh)
 ```
 
-The unified menu contains:
+The unified menu contains one Backhaul submenu (Standard and XWSMUX Max are
+grouped together instead of appearing as duplicate top-level engines):
 
 | Menu | Engine | Modes |
 |---|---|---|

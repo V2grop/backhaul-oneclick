@@ -3,14 +3,15 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
 
 BACKHAUL_URL="${TUNNEL_MANAGER_BACKHAUL_URL:-${RAW_BASE}/oneclick-v3-en.sh}"
-XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
-XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-https://raw.githubusercontent.com/${REPO}/codex/xwsmux-max-v3/oneclick-xwsmux-max.sh}"
+XWSMUX_MAX_PINNED_REF="${TUNNEL_MANAGER_XWSMUX_MAX_PINNED_REF:-db3b8b99eb966ddd2a8a77eee77e8c0abd157c94}"
+XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-https://raw.githubusercontent.com/${REPO}/${XWSMUX_MAX_PINNED_REF}/oneclick-xwsmux-max.sh}"
+XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
 V2QUANTUM_URL="${TUNNEL_MANAGER_V2QUANTUM_URL:-${RAW_BASE}/v2quantum-oneclick.sh}"
 REALM_URL="${TUNNEL_MANAGER_REALM_URL:-https://raw.githubusercontent.com/Sir-Adnan/Realm-Tunnel-Manager/main/realm.sh}"
 SELF_URL="${TUNNEL_MANAGER_SELF_URL:-${RAW_BASE}/oneclick-universal.sh}"
@@ -178,9 +179,30 @@ run_xwsmux_max() {
     bash "$script"
     return
   fi
-  warn "XWSMUX Max is not on $REF; trying its preserved project branch."
+  warn "Pinned XWSMUX Max download failed; trying the selected ref $REF."
   script="$(download_script "$XWSMUX_MAX_FALLBACK_URL" xwsmux-max-fallback)" || return 1
   bash "$script"
+}
+
+backhaul_menu() {
+  local choice
+  while true; do
+    clear 2>/dev/null || true
+    echo "===================================================="
+    echo "                  Backhaul family"
+    echo "===================================================="
+    echo "1) Standard manager - all transports including TUN"
+    echo "2) XWSMUX Max - optimized Cloudflare profile"
+    echo "0) Return to universal menu"
+    echo
+    IFS= read -r -p "Choose [0-2]: " choice
+    case "${choice,,}" in
+      1|standard|backhaul) run_backhaul || warn "Backhaul manager exited with an error."; pause_menu ;;
+      2|xwsmux|max) run_xwsmux_max || warn "XWSMUX Max manager exited with an error."; pause_menu ;;
+      0|back|return|q|quit) return 0 ;;
+      *) warn "Invalid selection."; sleep 1 ;;
+    esac
+  done
 }
 
 run_v2quantum() {
@@ -290,26 +312,24 @@ menu() {
     echo "===================================================="
     echo "        Universal Tunnel Manager v$SCRIPT_VERSION"
     echo "===================================================="
-    echo "1) Backhaul - all transports including TUN"
-    echo "2) XWSMUX Max - optimized Cloudflare tunnel"
-    echo "3) V2Quantum - TCP / Quantum / Raw spoof-BIP"
-    echo "4) Realm - TCP/UDP port forwarding"
-    echo "5) Unified status and diagnostics"
-    echo "6) Install/update tunnel-manager shortcut"
-    echo "7) Remove only the launcher shortcut"
-    echo "8) Capabilities and important limitations"
+    echo "1) Backhaul family - Standard / XWSMUX Max / TUN"
+    echo "2) V2Quantum - TCP / Quantum / Raw spoof-BIP"
+    echo "3) Realm - TCP/UDP port forwarding"
+    echo "4) Unified status and diagnostics"
+    echo "5) Install/update tunnel-manager shortcut"
+    echo "6) Remove only the launcher shortcut"
+    echo "7) Capabilities and important limitations"
     echo "0) Exit"
     echo
-    IFS= read -r -p "Choose [0-8]: " choice
+    IFS= read -r -p "Choose [0-7]: " choice
     case "${choice,,}" in
-      1|backhaul) run_backhaul || warn "Backhaul manager exited with an error."; pause_menu ;;
-      2|xwsmux|max) run_xwsmux_max || warn "XWSMUX Max manager exited with an error."; pause_menu ;;
-      3|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
-      4|realm|forward) run_realm || warn "Realm manager exited with an error."; pause_menu ;;
-      5|status|diag) show_status; pause_menu ;;
-      6|install|update) install_shortcut; pause_menu ;;
-      7|remove|uninstall) remove_shortcut; pause_menu ;;
-      8|info|capabilities) capabilities; pause_menu ;;
+      1|backhaul) backhaul_menu ;;
+      2|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
+      3|realm|forward) run_realm || warn "Realm manager exited with an error."; pause_menu ;;
+      4|status|diag) show_status; pause_menu ;;
+      5|install|update) install_shortcut; pause_menu ;;
+      6|remove|uninstall) remove_shortcut; pause_menu ;;
+      7|info|capabilities) capabilities; pause_menu ;;
       0|q|quit|exit) exit 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
