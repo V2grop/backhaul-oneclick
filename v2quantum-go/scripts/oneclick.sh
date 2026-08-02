@@ -22,6 +22,8 @@ OPEN_MENU=true
 ASSUME_YES=false
 PURGE=false
 FORCE_SOURCE="${V2QUANTUM_FORCE_SOURCE:-0}"
+ALLOW_SOURCE="${V2QUANTUM_ALLOW_SOURCE_BUILD:-0}"
+[[ "$FORCE_SOURCE" == "1" ]] && ALLOW_SOURCE=1
 
 usage() {
   cat <<'EOF'
@@ -32,7 +34,8 @@ Usage:
 
 Options:
   --no-menu       Do not open the manager after installation
-  --source        Build from the selected GitHub ref instead of a release
+  --source        Developer mode: build from the selected GitHub ref
+  --release-only  Never download a Go toolchain or build on this server
   --purge         With --uninstall, also remove tunnel configuration
   -y, --yes       Accept uninstall confirmation
   -h, --help      Show this help
@@ -45,7 +48,8 @@ while (( $# > 0 )); do
     --update) ACTION="update"; OPEN_MENU=false ;;
     --uninstall) ACTION="uninstall"; OPEN_MENU=false ;;
     --no-menu) OPEN_MENU=false ;;
-    --source) FORCE_SOURCE=1 ;;
+    --source) FORCE_SOURCE=1; ALLOW_SOURCE=1 ;;
+    --release-only) FORCE_SOURCE=0; ALLOW_SOURCE=0 ;;
     --purge) PURGE=true ;;
     -y|--yes) ASSUME_YES=true ;;
     -h|--help) usage; exit 0 ;;
@@ -246,8 +250,25 @@ source_install() {
     go_bin="$(command -v go)"
   else
     warn "A temporary verified Go $GO_VERSION toolchain is required for this source build."
-    download "https://go.dev/dl/go$GO_VERSION.linux-$ARCH.tar.gz" "$TMP_DIR/go.tar.gz"
-    printf '%s  %s\n' "$GO_SHA256" "$TMP_DIR/go.tar.gz" | sha256sum -c -
+    local go_url verified=false
+    local go_urls=()
+    [[ -n "${V2QUANTUM_GO_URL:-}" ]] && go_urls+=("$V2QUANTUM_GO_URL")
+    go_urls+=(
+      "https://go.dev/dl/go$GO_VERSION.linux-$ARCH.tar.gz"
+      "https://dl.google.com/go/go$GO_VERSION.linux-$ARCH.tar.gz"
+      "https://storage.googleapis.com/golang/go$GO_VERSION.linux-$ARCH.tar.gz"
+    )
+    for go_url in "${go_urls[@]}"; do
+      rm -f -- "$TMP_DIR/go.tar.gz"
+      echo "Trying verified Go toolchain source: $go_url"
+      if download "$go_url" "$TMP_DIR/go.tar.gz" && \
+        printf '%s  %s\n' "$GO_SHA256" "$TMP_DIR/go.tar.gz" | sha256sum -c -; then
+        verified=true
+        break
+      fi
+      warn "This Go download source failed; trying the next verified source."
+    done
+    [[ "$verified" == true ]] || die "Could not download a verified Go $GO_VERSION toolchain. Use a published V2Quantum release or set V2QUANTUM_GO_URL to an authorized mirror."
     tar -xzf "$TMP_DIR/go.tar.gz" -C "$TMP_DIR"
     go_bin="$TMP_DIR/go/bin/go"
   fi
@@ -262,12 +283,16 @@ if [[ "$FORCE_SOURCE" != "1" && "$REF" == "main" ]]; then
   echo "Checking for a verified V2Quantum release..."
   if release_install; then
     INSTALLED_FROM="release:latest"
-  else
-    warn "No complete release is available; falling back to a source build from ref $REF."
+  elif [[ "$ALLOW_SOURCE" == "1" ]]; then
+    warn "No complete release is available; using the explicitly enabled source build from ref $REF."
     source_install
+  else
+    die "No complete V2Quantum release is published yet. Normal server installation is release-only and will not download Go. The maintainer must publish a release; developers may opt in with --source."
   fi
-else
+elif [[ "$ALLOW_SOURCE" == "1" ]]; then
   source_install
+else
+  die "Ref $REF has no release asset. Source builds are disabled by default; use --source only for a temporary developer test."
 fi
 
 install -d -m750 /etc/v2quantum

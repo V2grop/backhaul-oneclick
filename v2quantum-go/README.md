@@ -53,7 +53,13 @@ make release VERSION=0.1.0
 bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/v2quantum-oneclick.sh)
 ```
 
-نصب‌کننده ابتدا صحت release را با `SHA256SUMS` بررسی می‌کند. اگر release کامل موجود نباشد، از source همان ref با toolchain موقت و checksum ثابت build می‌کند؛ Go روی سرور باقی نمی‌ماند.
+نصب‌کنندهٔ عمومی فقط release استاتیک را با `SHA256SUMS` بررسی و نصب می‌کند؛ بنابراین روی سرور عمومی Go دانلود یا نصب نمی‌شود. build از source فقط برای توسعه‌دهنده و به‌صورت صریح با `--source` فعال می‌شود. در این حالت موقت، سه آدرس رسمی دانلود Go به‌ترتیب امتحان می‌شوند، checksum ثابت بررسی می‌شود و toolchain پس از پایان حذف می‌گردد.
+
+برای دسترسی به تمام موتورهای پروژه از منوی واحد استفاده کنید:
+
+```bash
+bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/oneclick-universal.sh)
+```
 
 راه‌اندازی پیشنهادی بدون تداخل با Backhaul قبلی:
 

@@ -15,10 +15,11 @@ test:
 	$(GO) test ./...
 
 shell-test: build
-	bash -n scripts/install.sh scripts/install-remote.sh scripts/oneclick.sh scripts/manager.sh scripts/watchdog.sh tests/test-install.sh tests/test-manager.sh tests/test-watchdog.sh ../v2quantum-oneclick.sh
+	bash -n scripts/install.sh scripts/install-remote.sh scripts/oneclick.sh scripts/manager.sh scripts/watchdog.sh tests/test-install.sh tests/test-manager.sh tests/test-watchdog.sh tests/test-universal.sh ../v2quantum-oneclick.sh ../oneclick-universal.sh
 	bash tests/test-install.sh ./bin/v2quantum
 	bash tests/test-manager.sh ./bin/v2quantum
 	bash tests/test-watchdog.sh
+	bash tests/test-universal.sh
 
 race:
 	$(GO) test -race ./...
