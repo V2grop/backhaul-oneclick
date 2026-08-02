@@ -8,10 +8,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/config"
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/rawip"
@@ -41,6 +44,8 @@ func run(args []string) error {
 		return keygen()
 	case "spoof-check":
 		return spoofCheck(args[1:])
+	case "healthcheck":
+		return healthCheck(args[1:])
 	case "version", "-v", "--version":
 		fmt.Println("v2quantum-go", version)
 		return nil
@@ -53,10 +58,57 @@ func run(args []string) error {
 	}
 }
 
+func healthCheck(args []string) error {
+	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+	path := fs.String("config", "", "path to JSON configuration")
+	timeout := fs.Duration("timeout", 5*time.Second, "health request timeout")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *path == "" {
+		return errors.New("healthcheck requires -config")
+	}
+	if *timeout < time.Second || *timeout > 30*time.Second {
+		return errors.New("healthcheck timeout must be between 1s and 30s")
+	}
+	cfg, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+cfg.Health.Listen+"/healthz", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("health request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return fmt.Errorf("read health response: %w", err)
+	}
+	if len(body) > 0 {
+		fmt.Print(string(body))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health endpoint returned %s", resp.Status)
+	}
+	return nil
+}
+
 func runTunnel(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	path := fs.String("config", "", "path to JSON configuration")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *path == "" {
@@ -99,6 +151,9 @@ func checkConfig(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	path := fs.String("config", "", "path to JSON configuration")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *path == "" {
@@ -126,6 +181,9 @@ func spoofCheck(args []string) error {
 	path := fs.String("config", "", "path to a raw_icmp JSON configuration")
 	send := fs.Bool("send", false, "send one authenticated-tag test packet after preflight")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *path == "" {
@@ -163,6 +221,7 @@ Usage:
   v2quantum run -config FILE
   v2quantum check -config FILE
   v2quantum keygen
+  v2quantum healthcheck -config FILE [-timeout 5s]
   v2quantum spoof-check -config FILE [-send]
   v2quantum version
 `, version)

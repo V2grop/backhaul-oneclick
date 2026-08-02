@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: "1.26.x"
           cache-dependency-path: v2quantum-go/go.mod
 
       - name: Verify
@@ -40,7 +40,11 @@ jobs:
             dist/v2quantum-linux-amd64 \
             dist/v2quantum-linux-arm64 \
             dist/v2quantum-manager \
+            dist/v2quantum-installer \
+            dist/v2quantum-watchdog \
             dist/v2quantum@.service \
+            dist/v2quantum-watchdog@.service \
+            dist/v2quantum-watchdog@.timer \
             dist/SHA256SUMS \
             --title "V2Quantum ${GITHUB_REF_NAME#v2quantum-v}" \
             --generate-notes

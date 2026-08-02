@@ -127,6 +127,12 @@ func (s *session) addStream(st *stream) bool {
 	if s.isClosed() {
 		return false
 	}
+	// Enforce the limit while holding the stream-map lock. The earlier fast
+	// check in open() avoids unnecessary work, but concurrent opens must not be
+	// able to race past the configured cap.
+	if s.active.Load() >= int64(s.maxStreams) {
+		return false
+	}
 	if _, exists := s.streams[st.id]; exists {
 		return false
 	}
@@ -222,6 +228,7 @@ func (s *session) handleOpen(frame protocol.Frame) {
 		_ = s.conn.WriteFrame(protocol.Frame{Type: protocol.OpenError, StreamID: frame.StreamID, Payload: []byte("target unavailable")})
 		return
 	}
+	tuneTCPConn(conn, s.keepalive)
 	st := &stream{
 		id:      frame.StreamID,
 		session: s,

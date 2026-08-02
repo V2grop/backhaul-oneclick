@@ -22,6 +22,7 @@ func DialContext(ctx context.Context, address string, timeout, idleTimeout time.
 }
 
 func DialPacket(ctx context.Context, pc net.PacketConn, remote net.Addr, timeout, idleTimeout time.Duration) (*Conn, error) {
+	tunePacketBuffers(pc)
 	success := false
 	defer func() {
 		if !success {

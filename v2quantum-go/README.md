@@ -11,9 +11,12 @@
 - رمزنگاری تمام frameها با AES-256-GCM، کلید جدا برای هر جهت و counter ضد replay/order.
 - Quantum UDP با cookie بدون state، پنجره ۱۲۸ بسته، ACK تجمعی، reorder، retransmit و timeout.
 - reconnect با exponential backoff و jitter، keepalive داخلی و راه‌اندازی مجدد توسط systemd.
-- health endpoint روی `127.0.0.1:9090/healthz` و metrics سازگار با Prometheus روی `/metrics`.
+- health endpoint جدا برای هر instance روی loopback (مدیر معمولاً از پورت `19090` به بعد انتخاب می‌کند) و metrics سازگار با Prometheus روی `/metrics`.
 - Raw ICMP با packet IPv4 واقعی، checksum، `IP_HDRINCL`، تنظیم interface، MTU و source/destination override کنترل‌شده.
-- تولید خودکار توکن در سمت ایران و منوی ساده با پذیرش `y` یا `Y`.
+- تولید خودکار setup code در ایران؛ خارج با Paste همان یک کد، carrier، آدرس ایران، پروفایل و تعداد mappingها را دریافت می‌کند.
+- نصب/آپدیت/حذف تک‌خطی، backup خودکار تنظیمات، بررسی تداخل پورت و پشتیبانی از چند mapping.
+- watchdog سه‌مرحله‌ای سمت خارج؛ سه healthcheck ناموفق متوالی باعث restart سرویس می‌شود.
+- بازکردن خودکار پورت‌ها در UFW/firewalld فعال، بدون نصب یا تغییر فایروال موجود.
 
 ## انتخاب carrier
 
@@ -42,29 +45,33 @@ make build
 make release VERSION=0.1.0
 ```
 
-## نصب ساده
+## نصب تک‌خطی
 
-از داخل همین پوشه:
-
-```bash
-sudo ./scripts/install.sh
-sudo v2quantum-manager
-```
-
-بعد از انتشار Release، نصب مستقیم روی سرور بدون نیاز به Go:
+روی هر دو سرور ایران و خارج، به‌عنوان root اجرا کنید:
 
 ```bash
-bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/v2quantum-go/scripts/install-remote.sh)
+bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/v2quantum-oneclick.sh)
 ```
 
-ترتیب پیشنهادی:
+نصب‌کننده ابتدا صحت release را با `SHA256SUMS` بررسی می‌کند. اگر release کامل موجود نباشد، از source همان ref با toolchain موقت و checksum ثابت build می‌کند؛ Go روی سرور باقی نمی‌ماند.
 
-1. روی سرور ایران گزینه `1` را بزنید، carrier و پورت را انتخاب کنید. توکن ۶۴کاراکتری خودکار ساخته و در پایان چاپ می‌شود.
-2. همان توکن را روی سرور خارج در گزینه `2` paste کنید.
-3. برای نمونه، mapping ایران را `0.0.0.0:2444` و target خارج را `127.0.0.1:2444` بگذارید.
-4. در firewall فقط carrier را باز کنید: `8880/tcp` برای TCP یا `8880/udp` برای Quantum. پورت `2444/tcp` نیز باید برای کاربران روی ایران باز باشد.
+راه‌اندازی پیشنهادی بدون تداخل با Backhaul قبلی:
 
-مدیر سرویس از `v2quantum@iran.service` و `v2quantum@outside.service` استفاده می‌کند. systemd با `Restart=always` جای cron را می‌گیرد و در صورت crash یا قطع carrier، کلاینت نیز خودش reconnect می‌کند.
+1. ایران: گزینه `1`، حالت Quantum، پروفایل Balanced، ورودی عمومی `2445` و carrier برابر `8890`.
+2. setup code با پیشوند `V2Q1_` را کپی کنید؛ این کد حاوی PSK است و نباید عمومی شود.
+3. خارج: گزینه `2` و Paste همان setup code؛ مقصد پیش‌فرض `127.0.0.1:2444` است.
+4. در firewall ایران، `8890/udp` و `2445/tcp` باید باز باشند. خارج فقط اتصال خروجی به `8890/udp` نیاز دارد.
+5. در لینک VLESS فقط پورت ورودی ایران را به `2445` تغییر دهید؛ Xray خارج همچنان روی `2444` می‌ماند.
+
+برای چند پورت، در ایران پورت‌ها را با کاما وارد کنید؛ برای مثال `2445,2446,2447`. خارج باید همان تعداد target را به همان ترتیب بدهد. مدیر سرویس از `v2quantum@iran.service`، `v2quantum@outside.service` و `v2quantum-watchdog@outside.timer` استفاده می‌کند. systemd با `Restart=always` جای cron را می‌گیرد و خود هسته نیز reconnect با backoff و jitter دارد.
+
+مدیریت بعد از نصب:
+
+```bash
+v2quantum-manager
+v2quantum-installer --update
+v2quantum-installer --uninstall
+```
 
 ## اجرای دستی
 
@@ -123,6 +130,7 @@ sudo v2quantum spoof-check -config /etc/v2quantum/iran.json -send
 - ردشدن PSK اشتباه و حفاظت sequence رکوردها.
 - انتقال سرتاسری هم‌زمان روی TCP و Quantum UDP.
 - Raw packet loopback، Quantum روی Raw ICMP و reverse tunnel رمز‌شده روی Raw ICMP.
+- نصب ایزوله، نگهداری فایل‌های Backhaul، rollback تنظیمات در خطای start و حذف با `y` کوچک.
 - race detector، vet و build باینری در فرایند release بررسی می‌شوند.
 
 برای مشاهده وضعیت:
@@ -130,5 +138,6 @@ sudo v2quantum spoof-check -config /etc/v2quantum/iran.json -send
 ```bash
 systemctl status v2quantum@iran --no-pager
 journalctl -u v2quantum@iran -f
-curl -fsS http://127.0.0.1:9090/healthz
+set -a; source /etc/v2quantum/iran.env; set +a
+v2quantum healthcheck -config /etc/v2quantum/iran.json
 ```

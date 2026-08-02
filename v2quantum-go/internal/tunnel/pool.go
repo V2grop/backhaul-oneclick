@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var errNoSession = errors.New("no healthy carrier session is available")
@@ -66,6 +67,11 @@ func (p *sessionPool) pick() (*session, error) {
 }
 
 func (p *sessionPool) waitPick(ctx context.Context) (*session, error) {
+	// Session add/remove events wake waiters immediately. A short fallback tick
+	// also handles the case where every session was temporarily at its stream
+	// limit and a stream slot becomes free without changing pool membership.
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if s, err := p.pick(); err == nil {
 			return s, nil
@@ -74,6 +80,7 @@ func (p *sessionPool) waitPick(ctx context.Context) (*session, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-p.notify:
+		case <-ticker.C:
 		}
 	}
 }

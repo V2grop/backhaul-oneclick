@@ -22,6 +22,81 @@ func TestEncryptedReverseTunnelEndToEnd(t *testing.T) {
 	}
 }
 
+func TestClientReconnectsAfterCarrierDrop(t *testing.T) {
+	for _, mode := range []string{"tcp", "quantum_udp"} {
+		t.Run(mode, func(t *testing.T) {
+			echoAddr, stopEcho := startEcho(t)
+			defer stopEcho()
+			carrierAddr := reserveCarrierAddress(t, mode)
+			userAddr := reserveAddress(t)
+			psk := strings.Repeat("reconnect-secret-", 3)
+
+			serverCfg := testConfig("server", psk)
+			serverCfg.Carrier.Mode = mode
+			serverCfg.Carrier.Listen = carrierAddr
+			serverCfg.Carrier.Pool = 1
+			serverCfg.Mappings = []config.Mapping{{Name: "echo", Protocol: "tcp", Listen: userAddr}}
+			clientCfg := testConfig("client", psk)
+			clientCfg.Carrier.Mode = mode
+			clientCfg.Carrier.Server = carrierAddr
+			clientCfg.Carrier.Pool = 1
+			clientCfg.Mappings = []config.Mapping{{Name: "echo", Protocol: "tcp", Target: echoAddr}}
+
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			server := NewRuntime(serverCfg, logger)
+			client := NewRuntime(clientCfg, logger)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errCh := make(chan error, 2)
+			go func() { errCh <- server.Run(ctx) }()
+			time.Sleep(30 * time.Millisecond)
+			go func() { errCh <- client.Run(ctx) }()
+			waitReady(t, server, client)
+
+			server.pool.closeAll()
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if client.Snapshot().Reconnects > 0 && server.Ready() && client.Ready() {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if client.Snapshot().Reconnects == 0 || !server.Ready() || !client.Ready() {
+				t.Fatalf("carrier did not recover: server=%+v client=%+v", server.Snapshot(), client.Snapshot())
+			}
+
+			conn, err := net.DialTimeout("tcp", userAddr, 2*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			want := []byte("reconnected")
+			if _, err := conn.Write(want); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, len(want))
+			if _, err := io.ReadFull(conn, got); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("reconnected echo mismatch: got %q", got)
+			}
+
+			cancel()
+			for i := 0; i < 2; i++ {
+				select {
+				case err := <-errCh:
+					if err != nil {
+						t.Fatalf("runtime shutdown: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("runtime did not shut down")
+				}
+			}
+		})
+	}
+}
+
 func testEncryptedReverseTunnelEndToEnd(t *testing.T, mode string) {
 	echoAddr, stopEcho := startEcho(t)
 	defer stopEcho()

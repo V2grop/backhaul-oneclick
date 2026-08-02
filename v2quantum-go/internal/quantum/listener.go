@@ -37,7 +37,19 @@ func Listen(address string, idleTimeout time.Duration) (*Listener, error) {
 	return ListenPacket(pc, idleTimeout)
 }
 
+func tunePacketBuffers(pc net.PacketConn) {
+	type bufferTuner interface {
+		SetReadBuffer(int) error
+		SetWriteBuffer(int) error
+	}
+	if tuned, ok := pc.(bufferTuner); ok {
+		_ = tuned.SetReadBuffer(8 << 20)
+		_ = tuned.SetWriteBuffer(8 << 20)
+	}
+}
+
 func ListenPacket(pc net.PacketConn, idleTimeout time.Duration) (*Listener, error) {
+	tunePacketBuffers(pc)
 	l := &Listener{
 		pc:          pc,
 		idleTimeout: idleTimeout,

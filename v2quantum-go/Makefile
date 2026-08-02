@@ -15,8 +15,10 @@ test:
 	$(GO) test ./...
 
 shell-test: build
-	bash -n scripts/install.sh scripts/install-remote.sh scripts/manager.sh tests/test-manager.sh
+	bash -n scripts/install.sh scripts/install-remote.sh scripts/oneclick.sh scripts/manager.sh scripts/watchdog.sh tests/test-install.sh tests/test-manager.sh tests/test-watchdog.sh ../v2quantum-oneclick.sh
+	bash tests/test-install.sh ./bin/v2quantum
 	bash tests/test-manager.sh ./bin/v2quantum
+	bash tests/test-watchdog.sh
 
 race:
 	$(GO) test -race ./...
@@ -31,9 +33,13 @@ release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -buildvcs=false -trimpath -ldflags '$(LDFLAGS)' -o dist/v2quantum-linux-amd64 ./cmd/v2quantum
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -buildvcs=false -trimpath -ldflags '$(LDFLAGS)' -o dist/v2quantum-linux-arm64 ./cmd/v2quantum
 	cp scripts/manager.sh dist/v2quantum-manager
+	cp scripts/oneclick.sh dist/v2quantum-installer
+	cp scripts/watchdog.sh dist/v2quantum-watchdog
 	cp systemd/v2quantum@.service dist/v2quantum@.service
-	chmod 755 dist/v2quantum-manager
-	cd dist && sha256sum v2quantum-linux-amd64 v2quantum-linux-arm64 v2quantum-manager v2quantum@.service > SHA256SUMS
+	cp systemd/v2quantum-watchdog@.service dist/v2quantum-watchdog@.service
+	cp systemd/v2quantum-watchdog@.timer dist/v2quantum-watchdog@.timer
+	chmod 755 dist/v2quantum-manager dist/v2quantum-installer dist/v2quantum-watchdog
+	cd dist && sha256sum v2quantum-linux-amd64 v2quantum-linux-arm64 v2quantum-manager v2quantum-installer v2quantum-watchdog v2quantum@.service v2quantum-watchdog@.service v2quantum-watchdog@.timer > SHA256SUMS
 
 clean:
-	rm -f bin/v2quantum dist/v2quantum-linux-amd64 dist/v2quantum-linux-arm64 dist/v2quantum-manager dist/v2quantum@.service dist/SHA256SUMS
+	rm -f bin/v2quantum dist/v2quantum-linux-amd64 dist/v2quantum-linux-arm64 dist/v2quantum-manager dist/v2quantum-installer dist/v2quantum-watchdog dist/v2quantum@.service dist/v2quantum-watchdog@.service dist/v2quantum-watchdog@.timer dist/SHA256SUMS

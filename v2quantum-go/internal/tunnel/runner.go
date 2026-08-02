@@ -30,10 +30,7 @@ func NewRuntime(cfg *config.Config, logger *slog.Logger) *Runtime {
 func (r *Runtime) Snapshot() Snapshot { return r.stats.Snapshot() }
 
 func (r *Runtime) Ready() bool {
-	if r.cfg.Role == "server" {
-		return r.pool.count() > 0
-	}
-	return r.stats.sessions.Load() >= int64(r.cfg.Carrier.Pool)
+	return r.pool.count() > 0
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -89,6 +86,7 @@ func (r *Runtime) acceptCarriers(ctx context.Context, listener net.Listener) {
 			}
 			return
 		}
+		tuneTCPConn(conn, r.cfg.Keepalive())
 		go func(raw net.Conn) {
 			secured, err := secure.Server(raw, []byte(r.cfg.Security.PSK))
 			if err != nil {
@@ -123,6 +121,7 @@ func (r *Runtime) serveMapping(ctx context.Context, mapping config.Mapping) erro
 			}
 			return fmt.Errorf("accept mapping %s: %w", mapping.Name, err)
 		}
+		tuneTCPConn(conn, r.cfg.Keepalive())
 		go r.openUserConnection(ctx, mapping.Name, conn)
 	}
 }
@@ -215,7 +214,11 @@ func (r *Runtime) dialCarrier(ctx context.Context) (net.Conn, error) {
 	switch r.cfg.Carrier.Mode {
 	case "tcp":
 		dialer := net.Dialer{Timeout: r.cfg.DialTimeout(), KeepAlive: r.cfg.Keepalive()}
-		return dialer.DialContext(ctx, "tcp", r.cfg.Carrier.Server)
+		conn, err := dialer.DialContext(ctx, "tcp", r.cfg.Carrier.Server)
+		if err == nil {
+			tuneTCPConn(conn, r.cfg.Keepalive())
+		}
+		return conn, err
 	case "quantum_udp":
 		return quantum.DialContext(ctx, r.cfg.Carrier.Server, r.cfg.DialTimeout(), 4*r.cfg.Keepalive())
 	case "raw_icmp":
@@ -227,6 +230,16 @@ func (r *Runtime) dialCarrier(ctx context.Context) (net.Conn, error) {
 	default:
 		return nil, fmt.Errorf("unsupported carrier mode %q", r.cfg.Carrier.Mode)
 	}
+}
+
+func tuneTCPConn(conn net.Conn, keepalive time.Duration) {
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcp.SetNoDelay(true)
+	_ = tcp.SetKeepAlive(true)
+	_ = tcp.SetKeepAlivePeriod(keepalive)
 }
 
 func (r *Runtime) sleepBackoff(ctx context.Context, base time.Duration) {
