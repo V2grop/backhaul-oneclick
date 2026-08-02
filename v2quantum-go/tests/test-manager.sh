@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if (( EUID != 0 )); then
+  if command -v sudo >/dev/null 2>&1; then
+    exec sudo env PATH="$PATH" bash "$0" "$@"
+  fi
+  echo "manager integration test skipped: root or sudo is required"
+  exit 0
+fi
+
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${1:-$PROJECT_DIR/bin/v2quantum}"
 MANAGER="$PROJECT_DIR/scripts/manager.sh"
