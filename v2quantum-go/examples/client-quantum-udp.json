@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "role": "client",
+  "node_name": "outside",
+  "carrier": {
+    "mode": "quantum_udp",
+    "server": "IRAN_IP:8880",
+    "pool": 4,
+    "keepalive_seconds": 10,
+    "dial_timeout_seconds": 8,
+    "reconnect_min_millis": 500,
+    "reconnect_max_millis": 15000,
+    "max_streams_per_session": 512
+  },
+  "security": {
+    "psk_env": "V2QUANTUM_PSK"
+  },
+  "mappings": [
+    {
+      "name": "vless",
+      "protocol": "tcp",
+      "target": "127.0.0.1:2444"
+    }
+  ],
+  "health": {
+    "listen": "127.0.0.1:9090",
+    "allow_public_listen": false
+  },
+  "logging": {
+    "level": "info",
+    "json": false
+  }
+}
