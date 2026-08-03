@@ -44,9 +44,11 @@ tunnel-manager --realm
 tunnel-manager --status
 ```
 
-Raw spoof/BIP cannot bypass BCP38 or a provider anti-spoofing policy. It works
-only with addresses and routes authorized on both servers; the V2Quantum
-preflight reports the local prerequisites before the service is used.
+Raw setup offers an assigned-IP ICMP scanner, authorized manual entry, or a
+real-IP-only mode. The automatic scanner ranks only addresses assigned to the
+server; it never scans or selects third-party websites. Raw spoof/BIP cannot
+bypass BCP38 or a provider anti-spoofing policy and works only with addresses
+and routes authorized on both servers.
 
 فایل‌های زیر را در ریشه ریپو قرار دهید:
 

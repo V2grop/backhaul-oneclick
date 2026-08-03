@@ -111,16 +111,32 @@ sudo v2quantum spoof-check -config /etc/v2quantum/iran.json
 sudo v2quantum spoof-check -config /etc/v2quantum/iran.json -send
 ```
 
+مدیر هنگام ساخت Raw سه روش انتخاب source ارائه می‌دهد:
+
+1. `Automatic safe scan`: فقط IPv4های واقعاً assign‌شده به interfaceهای فعال را تا peer با ICMP آزمایش می‌کند؛ IP با loss کمتر و RTT بهتر، پس از حداقل دو پاسخ از سه probe، انتخاب می‌شود.
+2. `Manual advanced entry`: برای secondary IP/BIP یا prefixای که دیتاسنتر صریحاً به همین سرور route و مجاز کرده است.
+3. `Real IP only`: بدون هیچ source/destination override.
+
+اسکن مستقل همان قابلیت:
+
+```bash
+sudo v2quantum spoof-scan -peer PEER_REAL_IPV4
+sudo v2quantum spoof-scan -peer PEER_REAL_IPV4 -json
+```
+
+اسکنر خودکار هیچ دامنه، رنج اینترنتی یا IP شخص ثالثی را تولید و اسکن نمی‌کند. پاسخ ICMP یک وب‌سایت عمومی نیز مجوز استفاده از IP آن به‌عنوان source نیست.
+
 معنی فیلدها:
 
 - `local_ip`: IP واقعی همین سرور؛ باید روی host موجود باشد.
 - `peer_ip`: IP واقعی سمت مقابل.
 - `spoof_source_ip`: IP مبدأ جایگزین؛ فقط IP مجاز و route‌شده به همین سرور.
 - `spoof_destination_ip`: IP/BIP جایگزین سمت مقابل.
+- `expected_peer_source_ip`: sourceای که باید در بسته‌های ورودی peer دیده شود؛ از مقصد ارسال مستقل است.
 - `icmp_identifier`: عدد یکسان در هر دو سمت.
 - `payload_mtu`: اندازه datagram خام؛ Quantum به‌صورت خودکار chunk را با آن هماهنگ می‌کند.
 
-اگر سمت ایران با source برابر `A2` و destination برابر `B2` تنظیم شود، سمت خارج باید source برابر `B2` و destination برابر `A2` داشته باشد. فعال‌کردن `allow_unrouted_spoof` فقط guard محلی برنامه را کنار می‌زند؛ BCP38 یا anti-spoof دیتاسنتر را دور نمی‌زند. موفقیت واقعی spoof فقط با تأیید provider و packet capture روی peer مشخص می‌شود.
+برای حالت معمول، `peer_ip` مقصد واقعی ارسال باقی می‌ماند و فقط `expected_peer_source_ip` نتیجهٔ انتخاب‌شدهٔ سمت مقابل است. `spoof_destination_ip` صرفاً برای BIP واقعاً route‌شده استفاده می‌شود. فعال‌کردن `allow_unrouted_spoof` فقط guard محلی برنامه را کنار می‌زند؛ BCP38 یا anti-spoof دیتاسنتر را دور نمی‌زند. موفقیت source غیرمحلی فقط با تأیید provider و packet capture روی peer مشخص می‌شود.
 
 ## امنیت و محدودیت‌ها
 

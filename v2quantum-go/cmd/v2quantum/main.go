@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/config"
@@ -44,6 +46,8 @@ func run(args []string) error {
 		return keygen()
 	case "spoof-check":
 		return spoofCheck(args[1:])
+	case "spoof-scan":
+		return spoofScan(args[1:])
 	case "healthcheck":
 		return healthCheck(args[1:])
 	case "version", "-v", "--version":
@@ -214,6 +218,78 @@ func spoofCheck(args []string) error {
 	return nil
 }
 
+func spoofScan(args []string) error {
+	fs := flag.NewFlagSet("spoof-scan", flag.ContinueOnError)
+	peerValue := fs.String("peer", "", "peer real IPv4 address")
+	count := fs.Int("count", 3, "ICMP probes per locally assigned source (1-10)")
+	timeout := fs.Duration("timeout", 2*time.Second, "timeout for each probe (200ms-10s)")
+	jsonOutput := fs.Bool("json", false, "print the complete report as JSON")
+	selectedOnly := fs.Bool("selected-only", false, "print the selected IP to stdout and the report to stderr")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *jsonOutput && *selectedOnly {
+		return errors.New("spoof-scan accepts only one of -json or -selected-only")
+	}
+	peer := net.ParseIP(*peerValue)
+	if peer == nil || peer.To4() == nil {
+		return errors.New("spoof-scan requires -peer with a valid IPv4 address")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := rawip.ScanAssignedSources(ctx, peer, *count, *timeout)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(encoded))
+	} else {
+		writer := io.Writer(os.Stdout)
+		if *selectedOnly {
+			writer = os.Stderr
+		}
+		printSourceScanReport(writer, report)
+	}
+	if report.Selected == "" {
+		return errors.New("no locally assigned source passed the minimum ICMP delivery threshold")
+	}
+	if *selectedOnly {
+		fmt.Println(report.Selected)
+	}
+	return nil
+}
+
+func printSourceScanReport(output io.Writer, report rawip.SourceScanReport) {
+	fmt.Fprintf(output, "Authorized local-source ICMP scan -> %s\n", report.Peer)
+	w := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "SOURCE\tINTERFACE\tSENT\tRECV\tLOSS\tAVG RTT\tSTATUS")
+	for _, result := range report.Candidates {
+		status := "ok"
+		if result.Error != "" {
+			status = result.Error
+		} else if result.Received == 0 {
+			status = "no reply"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%.1f%%\t%.2f ms\t%s\n",
+			result.IP, result.Interface, result.Sent, result.Received,
+			result.LossPercent, result.AvgRTTMillis, status)
+	}
+	_ = w.Flush()
+	if report.Selected != "" {
+		fmt.Fprintf(output, "Selected verified source: %s\n", report.Selected)
+	} else {
+		fmt.Fprintln(output, "Selected verified source: none")
+	}
+	fmt.Fprintln(output, report.Note)
+}
+
 func usage() {
 	fmt.Printf(`V2Quantum-Go %s - independent clean-room reverse tunnel
 
@@ -223,6 +299,7 @@ Usage:
   v2quantum keygen
   v2quantum healthcheck -config FILE [-timeout 5s]
   v2quantum spoof-check -config FILE [-send]
+  v2quantum spoof-scan -peer IPv4 [-count 3] [-timeout 2s]
   v2quantum version
 `, version)
 }

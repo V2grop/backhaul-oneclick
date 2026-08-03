@@ -72,13 +72,42 @@ set +a
 "$BIN" check -config "$MULTI_CLIENT_DIR/outside.json" >/dev/null
 
 RAW_DIR="$TMP_DIR/raw"
-run_manager "$RAW_DIR" $'1\n3\n2\n\n\n\n\n\n\n\n\n\n0\n'
+run_manager "$RAW_DIR" $'1\n3\n2\n\n\n\n\n\n\n3\n\n0\n'
 set -a
 # shellcheck disable=SC1090
 source "$RAW_DIR/iran.env"
 set +a
 "$BIN" check -config "$RAW_DIR/iran.json" >/dev/null
 grep -q '"mode": "raw_icmp"' "$RAW_DIR/iran.json"
+grep -q '"expected_peer_source_ip": "198.51.100.20"' "$RAW_DIR/iran.json"
+grep -q '"spoof_source_ip": ""' "$RAW_DIR/iran.json"
+
+# Automatic mode must use only the source returned by the safe assigned-IP scanner.
+REAL_BIN="$BIN"
+SCAN_BIN="$TMP_DIR/v2quantum-scan-fixture"
+cat >"$SCAN_BIN" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "spoof-scan" ]]; then
+  printf 'fixture scan selected 192.0.2.10\\n' >&2
+  printf '192.0.2.10\\n'
+  exit 0
+fi
+exec "$REAL_BIN" "\$@"
+EOF
+chmod 755 "$SCAN_BIN"
+BIN="$SCAN_BIN"
+AUTO_RAW_DIR="$TMP_DIR/raw-auto"
+run_manager "$AUTO_RAW_DIR" $'1\n3\n2\n25041\n192.0.2.10\n198.51.100.20\neth0\n22066\n1200\n1\n198.51.100.55\n192.0.2.10\n0\n'
+BIN="$REAL_BIN"
+grep -q '"spoof_source_ip": "192.0.2.10"' "$AUTO_RAW_DIR/iran.json"
+grep -q '"expected_peer_source_ip": "198.51.100.55"' "$AUTO_RAW_DIR/iran.json"
+
+# Manual mode keeps source, destination and expected peer source independent.
+MANUAL_RAW_DIR="$TMP_DIR/raw-manual"
+run_manager "$MANUAL_RAW_DIR" $'1\n3\n2\n25042\n192.0.2.10\n198.51.100.20\neth0\n22066\n1200\n2\n192.0.2.10\n203.0.113.20\n203.0.113.30\ny\n192.0.2.10\n0\n'
+grep -q '"spoof_source_ip": "192.0.2.10"' "$MANUAL_RAW_DIR/iran.json"
+grep -q '"spoof_destination_ip": "203.0.113.30"' "$MANUAL_RAW_DIR/iran.json"
+grep -q '"expected_peer_source_ip": "203.0.113.20"' "$MANUAL_RAW_DIR/iran.json"
 
 # A failed first start must not leave an enabled, half-configured instance.
 FAIL_SYSTEMCTL="$TMP_DIR/systemctl-fail"

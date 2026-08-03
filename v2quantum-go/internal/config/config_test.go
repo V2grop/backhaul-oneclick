@@ -58,3 +58,23 @@ func TestRejectUnroutedSpoofByDefault(t *testing.T) {
 		t.Fatalf("expected spoof guard error, got %v", err)
 	}
 }
+
+func TestValidateExpectedPeerSource(t *testing.T) {
+	c := validServer()
+	c.Carrier.Mode = "raw_icmp"
+	c.Carrier.Listen = ""
+	c.Carrier.Raw = RawSettings{
+		LocalIP:              "192.0.2.10",
+		PeerIP:               "192.0.2.20",
+		ExpectedPeerSourceIP: "198.51.100.20",
+		PayloadMTU:           1200,
+		ExperimentalEnabled:  true,
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid expected peer source rejected: %v", err)
+	}
+	c.Carrier.Raw.ExpectedPeerSourceIP = "not-an-ip"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "expected_peer_source_ip") {
+		t.Fatalf("invalid expected peer source accepted: %v", err)
+	}
+}

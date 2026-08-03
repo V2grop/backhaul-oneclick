@@ -13,6 +13,7 @@
     "raw": {
       "local_ip": "198.51.100.20",
       "peer_ip": "192.0.2.10",
+      "expected_peer_source_ip": "192.0.2.10",
       "interface": "eth0",
       "icmp_identifier": 22066,
       "payload_mtu": 1200,

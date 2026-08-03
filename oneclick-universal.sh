@@ -85,7 +85,8 @@ capabilities() {
 3) V2Quantum (independent open-source Go core)
    tcp, quantum_udp and experimental raw_icmp carriers, encrypted
    multiplexing, automatic Iran setup code, reconnect, watchdog,
-   health checks and controlled Raw spoof/BIP fields.
+   health checks, assigned-IP ICMP scanning, and controlled manual
+   Raw source/BIP fields.
    quantum_udp is the carrier; user mappings are currently TCP.
 
 4) Realm Tunnel Manager (external open-source project)

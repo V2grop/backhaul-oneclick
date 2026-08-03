@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+
+	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/config"
 )
 
 func TestBuildIPv4ICMPEcho(t *testing.T) {
@@ -22,5 +24,19 @@ func TestBuildIPv4ICMPEcho(t *testing.T) {
 	}
 	if packet[ipv4HeaderLen] != 8 {
 		t.Fatalf("unexpected ICMP type %d", packet[ipv4HeaderLen])
+	}
+}
+
+func TestExpectedPeerSourceIsIndependentFromSendDestination(t *testing.T) {
+	settings := config.RawSettings{
+		PeerIP:               "198.51.100.20",
+		SpoofDestinationIP:   "198.51.100.30",
+		ExpectedPeerSourceIP: "203.0.113.40",
+	}
+	if got := effectiveDestination(settings); got != "198.51.100.30" {
+		t.Fatalf("send destination=%s", got)
+	}
+	if got := effectiveExpectedPeer(settings); got != "203.0.113.40" {
+		t.Fatalf("expected peer source=%s", got)
 	}
 }

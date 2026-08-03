@@ -17,24 +17,26 @@ const (
 )
 
 type PreflightReport struct {
-	Platform          string `json:"platform"`
-	RunningAsRoot     bool   `json:"running_as_root"`
-	InterfaceFound    bool   `json:"interface_found"`
-	LocalIPAssigned   bool   `json:"local_ip_assigned"`
-	SourceIPAssigned  bool   `json:"source_ip_assigned"`
-	UnroutedSpoof     bool   `json:"unrouted_spoof"`
-	ConfiguredSource  string `json:"configured_source"`
-	ConfiguredTarget  string `json:"configured_target"`
-	ProviderCheckNote string `json:"provider_check_note"`
+	Platform           string `json:"platform"`
+	RunningAsRoot      bool   `json:"running_as_root"`
+	InterfaceFound     bool   `json:"interface_found"`
+	LocalIPAssigned    bool   `json:"local_ip_assigned"`
+	SourceIPAssigned   bool   `json:"source_ip_assigned"`
+	UnroutedSpoof      bool   `json:"unrouted_spoof"`
+	ConfiguredSource   string `json:"configured_source"`
+	ConfiguredTarget   string `json:"configured_target"`
+	ExpectedPeerSource string `json:"expected_peer_source"`
+	ProviderCheckNote  string `json:"provider_check_note"`
 }
 
 func Preflight(raw config.RawSettings) (PreflightReport, error) {
 	report := PreflightReport{
-		Platform:          runtime.GOOS,
-		RunningAsRoot:     os.Geteuid() == 0,
-		ConfiguredSource:  effectiveSource(raw),
-		ConfiguredTarget:  effectiveDestination(raw),
-		ProviderCheckNote: "The program cannot verify provider BCP38/anti-spoof policy; confirm it with the provider and a peer-side packet capture.",
+		Platform:           runtime.GOOS,
+		RunningAsRoot:      os.Geteuid() == 0,
+		ConfiguredSource:   effectiveSource(raw),
+		ConfiguredTarget:   effectiveDestination(raw),
+		ExpectedPeerSource: effectiveExpectedPeer(raw),
+		ProviderCheckNote:  "The program cannot verify provider BCP38/anti-spoof policy; confirm it with the provider and a peer-side packet capture.",
 	}
 	if runtime.GOOS != "linux" {
 		return report, errors.New("raw ICMP transport is Linux-only")
@@ -111,6 +113,13 @@ func effectiveDestination(raw config.RawSettings) string {
 		return raw.SpoofDestinationIP
 	}
 	return raw.PeerIP
+}
+
+func effectiveExpectedPeer(raw config.RawSettings) string {
+	if raw.ExpectedPeerSourceIP != "" {
+		return raw.ExpectedPeerSourceIP
+	}
+	return effectiveDestination(raw)
 }
 
 func ipAssigned(want net.IP) bool {

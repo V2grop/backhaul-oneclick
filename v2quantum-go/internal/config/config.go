@@ -37,15 +37,16 @@ type Carrier struct {
 }
 
 type RawSettings struct {
-	LocalIP             string `json:"local_ip,omitempty"`
-	PeerIP              string `json:"peer_ip,omitempty"`
-	Interface           string `json:"interface,omitempty"`
-	SpoofSourceIP       string `json:"spoof_source_ip,omitempty"`
-	SpoofDestinationIP  string `json:"spoof_destination_ip,omitempty"`
-	AllowUnroutedSpoof  bool   `json:"allow_unrouted_spoof,omitempty"`
-	ICMPIdentifier      int    `json:"icmp_identifier,omitempty"`
-	PayloadMTU          int    `json:"payload_mtu,omitempty"`
-	ExperimentalEnabled bool   `json:"experimental_enabled,omitempty"`
+	LocalIP              string `json:"local_ip,omitempty"`
+	PeerIP               string `json:"peer_ip,omitempty"`
+	Interface            string `json:"interface,omitempty"`
+	SpoofSourceIP        string `json:"spoof_source_ip,omitempty"`
+	SpoofDestinationIP   string `json:"spoof_destination_ip,omitempty"`
+	ExpectedPeerSourceIP string `json:"expected_peer_source_ip,omitempty"`
+	AllowUnroutedSpoof   bool   `json:"allow_unrouted_spoof,omitempty"`
+	ICMPIdentifier       int    `json:"icmp_identifier,omitempty"`
+	PayloadMTU           int    `json:"payload_mtu,omitempty"`
+	ExperimentalEnabled  bool   `json:"experimental_enabled,omitempty"`
 }
 
 type Security struct {
@@ -269,6 +270,12 @@ func validateRaw(r RawSettings) error {
 		dst := net.ParseIP(r.SpoofDestinationIP)
 		if dst == nil || dst.To4() == nil {
 			return errors.New("raw spoof_destination_ip must be IPv4")
+		}
+	}
+	if r.ExpectedPeerSourceIP != "" {
+		peerSource := net.ParseIP(r.ExpectedPeerSourceIP)
+		if peerSource == nil || peerSource.To4() == nil {
+			return errors.New("raw expected_peer_source_ip must be IPv4")
 		}
 	}
 	if !r.AllowUnroutedSpoof && !src.Equal(local) {

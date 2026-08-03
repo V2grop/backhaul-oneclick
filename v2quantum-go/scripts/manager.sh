@@ -60,6 +60,17 @@ valid_token() {
   [[ "$1" =~ ^[A-Za-z0-9_-]{43,512}$ ]]
 }
 
+valid_ipv4() {
+  local value="$1" part
+  local parts=()
+  [[ "$value" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  IFS='.' read -r -a parts <<<"$value"
+  (( ${#parts[@]} == 4 )) || return 1
+  for part in "${parts[@]}"; do
+    (( 10#$part >= 0 && 10#$part <= 255 )) || return 1
+  done
+}
+
 detect_public_ipv4() {
   local detected=""
   if command -v ip >/dev/null 2>&1; then
@@ -69,6 +80,14 @@ detect_public_ipv4() {
     detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
   fi
   printf '%s' "${detected:-IRAN_IP}"
+}
+
+detect_interface() {
+  local peer="$1" detected=""
+  if command -v ip >/dev/null 2>&1 && valid_ipv4 "$peer"; then
+    detected="$(ip -4 route get "$peer" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1)"
+  fi
+  printf '%s' "${detected:-eth0}"
 }
 
 port_is_listening() {
@@ -191,24 +210,68 @@ parse_setup_code() {
 }
 
 raw_block() {
-  local local_ip peer_ip iface identifier mtu spoof_source spoof_destination allow=false
-  local_ip="$(prompt_default "This server public IPv4" "192.0.2.10")"
+  local local_ip peer_ip iface identifier mtu source_mode selected_source detected_local
+  local spoof_source="" spoof_destination="" expected_peer_source allow=false value
+  detected_local="$(detect_public_ipv4)"
+  valid_ipv4 "$detected_local" || detected_local="192.0.2.10"
+  local_ip="$(prompt_default "This server public IPv4" "$detected_local")"
   peer_ip="$(prompt_default "Peer public IPv4" "198.51.100.20")"
-  iface="$(prompt_default "Network interface" "eth0")"
+  valid_ipv4 "$local_ip" || { error "Invalid local IPv4."; return 1; }
+  valid_ipv4 "$peer_ip" || { error "Invalid peer IPv4."; return 1; }
+  iface="$(prompt_default "Network interface" "$(detect_interface "$peer_ip")")"
   identifier="$(prompt_default "Shared ICMP identifier" "22066")"
   mtu="$(prompt_default "Raw payload MTU" "1200")"
-  spoof_source="$(prompt_default "Optional routed spoof source IPv4 (- disables)" "-")"
-  spoof_destination="$(prompt_default "Optional peer BIP destination IPv4 (- disables)" "-")"
-  [[ "$spoof_source" == "-" ]] && spoof_source=""
-  [[ "$spoof_destination" == "-" ]] && spoof_destination=""
   for value in "$local_ip" "$peer_ip" "$iface" "$identifier" "$mtu"; do
     safe_value "$value" || { error "Unsafe raw input."; return 1; }
   done
-  if [[ -n "$spoof_source" && "$spoof_source" != "$local_ip" ]]; then
-    warn "Use only an address routed to this host and authorized by the provider."
-    confirm "Enable source override?" || return 1
-    allow=true
-  fi
+
+  echo "1) Automatic safe scan - assigned local IPs, loss and RTT" >&2
+  echo "2) Manual advanced entry - authorized source/BIP only" >&2
+  echo "3) Real IP only - disable source and destination overrides" >&2
+  source_mode="$(prompt_default "Raw source selection" "1")"
+  case "${source_mode,,}" in
+    1|auto|scan|scanner)
+      echo >&2
+      warn "The scanner tests only IPv4 addresses assigned to this server; it never scans third-party ranges." >&2
+      if ! selected_source="$("$BIN" spoof-scan -peer "$peer_ip" -count 3 -timeout 2s -selected-only)"; then
+        error "No assigned source IP passed the ICMP threshold. Nothing was configured."
+        warn "Check peer ICMP/firewall, choose manual mode only with an authorized IP, or use Quantum UDP/TCP." >&2
+        return 1
+      fi
+      valid_ipv4 "$selected_source" || { error "Scanner returned an invalid IPv4."; return 1; }
+      spoof_source="$selected_source"
+      expected_peer_source="$(prompt_default "Expected peer source IPv4 (peer scanner result)" "$peer_ip")"
+      valid_ipv4 "$expected_peer_source" || { error "Invalid expected peer source IPv4."; return 1; }
+      [[ "$spoof_source" == "$local_ip" ]] || allow=true
+      ok "Verified local source selected: $spoof_source" >&2
+      ;;
+    2|manual|advanced)
+      warn "Use only an IP assigned/routed to this server and explicitly authorized by its provider." >&2
+      spoof_source="$(prompt_default "Authorized source IPv4" "$local_ip")"
+      expected_peer_source="$(prompt_default "Expected peer source IPv4" "$peer_ip")"
+      spoof_destination="$(prompt_default "Optional destination/BIP override (- disables)" "-")"
+      [[ "$spoof_destination" == "-" ]] && spoof_destination=""
+      valid_ipv4 "$spoof_source" || { error "Invalid source IPv4."; return 1; }
+      valid_ipv4 "$expected_peer_source" || { error "Invalid expected peer source IPv4."; return 1; }
+      [[ -z "$spoof_destination" ]] || valid_ipv4 "$spoof_destination" || { error "Invalid destination override IPv4."; return 1; }
+      if [[ "$spoof_source" != "$local_ip" ]]; then
+        confirm "Confirm this source is authorized and routed to this server" || return 1
+        allow=true
+      fi
+      if [[ -n "$spoof_destination" ]]; then
+        confirm "Confirm this destination/BIP is authorized and routed to the peer" || return 1
+      fi
+      ;;
+    3|real|off|none|disable)
+      expected_peer_source="$peer_ip"
+      ok "Raw ICMP will use the two real server IPs without an override." >&2
+      ;;
+    *)
+      error "Unknown raw source selection."
+      return 1
+      ;;
+  esac
+
   printf '%s\n' \
     '    "raw": {' \
     "      \"local_ip\": \"$local_ip\"," \
@@ -216,6 +279,7 @@ raw_block() {
     "      \"interface\": \"$iface\"," \
     "      \"spoof_source_ip\": \"$spoof_source\"," \
     "      \"spoof_destination_ip\": \"$spoof_destination\"," \
+    "      \"expected_peer_source_ip\": \"$expected_peer_source\"," \
     "      \"allow_unrouted_spoof\": $allow," \
     "      \"icmp_identifier\": $identifier," \
     "      \"payload_mtu\": $mtu," \

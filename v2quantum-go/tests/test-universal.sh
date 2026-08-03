@@ -107,6 +107,7 @@ grep -q 'v2quantum' "$TMP_DIR/status.txt"
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --capabilities >"$TMP_DIR/capabilities.txt"
 grep -q 'Pengu and Dagger licensed binaries are not bundled' "$TMP_DIR/capabilities.txt"
 grep -q 'quantum_udp is the carrier' "$TMP_DIR/capabilities.txt"
+grep -q 'assigned-IP ICMP scanning' "$TMP_DIR/capabilities.txt"
 grep -q 'mirrors.aliyun.com/golang' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 grep -q 'golang.google.cn/dl' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 

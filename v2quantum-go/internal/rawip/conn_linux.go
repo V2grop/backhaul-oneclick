@@ -73,7 +73,7 @@ func ListenPacket(settings config.RawSettings, server bool) (*PacketConn, error)
 		// ICMP portion to Go.
 		readBuffer:   make([]byte, settings.PayloadMTU+icmpHeaderLen+ipv4HeaderLen),
 		localAddr:    &net.IPAddr{IP: net.ParseIP(settings.LocalIP)},
-		expectedPeer: net.ParseIP(effectiveDestination(settings)),
+		expectedPeer: net.ParseIP(effectiveExpectedPeer(settings)),
 	}, nil
 }
 
@@ -177,7 +177,7 @@ func (c *PacketConn) SetReadDeadline(t time.Time) error  { return c.recv.SetRead
 func (c *PacketConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 func ExpectedPeerAddr(settings config.RawSettings) net.Addr {
-	return &net.IPAddr{IP: net.ParseIP(effectiveDestination(settings))}
+	return &net.IPAddr{IP: net.ParseIP(effectiveExpectedPeer(settings))}
 }
 
 var _ net.PacketConn = (*PacketConn)(nil)

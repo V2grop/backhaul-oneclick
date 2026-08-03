@@ -55,3 +55,12 @@ func TestHealthCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestSpoofScanRejectsInvalidInput(t *testing.T) {
+	if err := spoofScan([]string{"-peer", "not-an-ip"}); err == nil || !strings.Contains(err.Error(), "valid IPv4") {
+		t.Fatalf("invalid peer error = %v", err)
+	}
+	if err := spoofScan([]string{"-peer", "192.0.2.10", "-json", "-selected-only"}); err == nil || !strings.Contains(err.Error(), "only one") {
+		t.Fatalf("conflicting output flags error = %v", err)
+	}
+}
