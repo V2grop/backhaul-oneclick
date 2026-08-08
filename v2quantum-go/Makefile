@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= 0.3.0
+VERSION ?= 0.4.0
 BINARY := bin/v2quantum
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -15,11 +15,12 @@ test:
 	$(GO) test ./...
 
 shell-test: build
-	bash -n scripts/install.sh scripts/install-remote.sh scripts/oneclick.sh scripts/manager.sh scripts/watchdog.sh tests/test-install.sh tests/test-manager.sh tests/test-watchdog.sh tests/test-universal.sh ../v2quantum-oneclick.sh ../oneclick-universal.sh ../oneclick-v3-en.sh ../oneclick-xwsmux-max.sh ../tests/test-backhaul-wrapper.sh ../tests/test-xwsmux-max.sh
+	bash -n scripts/install.sh scripts/install-remote.sh scripts/oneclick.sh scripts/manager.sh scripts/watchdog.sh tests/test-install.sh tests/test-manager.sh tests/test-watchdog.sh tests/test-universal.sh tests/test-fusion-bootstrap.sh ../v2quantum-oneclick.sh ../fusionmux-oneclick.sh ../oneclick-universal.sh ../oneclick-v3-en.sh ../oneclick-xwsmux-max.sh ../tests/test-backhaul-wrapper.sh ../tests/test-xwsmux-max.sh
 	bash tests/test-install.sh ./bin/v2quantum
 	bash tests/test-manager.sh ./bin/v2quantum
 	bash tests/test-watchdog.sh
 	bash tests/test-universal.sh
+	bash tests/test-fusion-bootstrap.sh
 	bash ../tests/test-xwsmux-max.sh
 	bash ../tests/test-backhaul-wrapper.sh
 

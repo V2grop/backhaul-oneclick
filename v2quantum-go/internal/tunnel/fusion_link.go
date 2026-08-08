@@ -29,14 +29,15 @@ type fusionHub struct {
 	recoveryHold       time.Duration
 	replayLimit        int
 
-	mu      sync.RWMutex
-	links   map[*fusionLink]struct{}
-	primary *fusionLink
-	flows   map[uint32]*fusionFlow
-	openMu  sync.Mutex
-	change  chan struct{}
-	closed  bool
-	nextID  atomic.Uint32
+	mu          sync.RWMutex
+	links       map[*fusionLink]struct{}
+	primary     *fusionLink
+	flows       map[uint32]*fusionFlow
+	closedFlows map[uint32]time.Time
+	openMu      sync.Mutex
+	change      chan struct{}
+	closed      bool
+	nextID      atomic.Uint32
 }
 
 type fusionLink struct {
@@ -58,7 +59,8 @@ func newFusionHub(ctx context.Context, logger *slog.Logger, stats *Stats, role s
 		keepalive: keepalive, dialTimeout: dialTimeout,
 		unavailableTimeout: unavailableTimeout, recoveryHold: recoveryHold,
 		replayLimit: replayLimit, links: make(map[*fusionLink]struct{}),
-		flows: make(map[uint32]*fusionFlow), change: make(chan struct{}, 1),
+		flows: make(map[uint32]*fusionFlow), closedFlows: make(map[uint32]time.Time),
+		change: make(chan struct{}, 1),
 	}
 	h.nextID.Store(1)
 	return h
@@ -100,16 +102,12 @@ func (h *fusionHub) addLink(conn *secure.Conn, name, mode string, priority int) 
 	go l.reader()
 	go l.keepaliveLoop()
 	if previous != selected {
-		h.notePrimary(previous, selected)
+		h.notePrimary(previous, selected, false)
 		for _, flow := range flows {
 			go flow.resume()
 		}
 	} else if priority < previous.priority {
 		go h.promoteAfter(l)
-	} else {
-		for _, flow := range flows {
-			go flow.replayPending()
-		}
 	}
 	return l
 }
@@ -143,7 +141,7 @@ func (h *fusionHub) promoteAfter(candidate *fusionLink) {
 	h.primary = candidate
 	flows := h.flowSnapshotLocked()
 	h.mu.Unlock()
-	h.notePrimary(previous, candidate)
+	h.notePrimary(previous, candidate, false)
 	h.signalChange()
 	for _, flow := range flows {
 		go flow.resume()
@@ -170,10 +168,10 @@ func (h *fusionHub) removeLink(link *fusionLink) {
 	h.signalChange()
 	h.logger.Warn("FusionMux path disconnected", "path", link.name, "mode", link.mode)
 	if previous != next {
-		h.notePrimary(previous, next)
-	}
-	for _, flow := range flows {
-		go flow.resume()
+		h.notePrimary(previous, next, previous == link)
+		for _, flow := range flows {
+			go flow.resume()
+		}
 	}
 	if empty {
 		go h.expireIfUnavailable()
@@ -200,7 +198,7 @@ func (h *fusionHub) expireIfUnavailable() {
 	}
 }
 
-func (h *fusionHub) notePrimary(previous, next *fusionLink) {
+func (h *fusionHub) notePrimary(previous, next *fusionLink, failed bool) {
 	previousName, nextName := "", ""
 	if previous != nil {
 		previousName = previous.name
@@ -208,7 +206,7 @@ func (h *fusionHub) notePrimary(previous, next *fusionLink) {
 	if next != nil {
 		nextName = next.name
 	}
-	if previous != nil && previous != next {
+	if failed && previous != nil && previous != next {
 		h.stats.fusionFailovers.Add(1)
 	}
 	h.stats.setFusionPrimary(nextName)
@@ -321,9 +319,41 @@ func (h *fusionHub) removeFlow(id uint32) {
 	h.mu.Lock()
 	if _, exists := h.flows[id]; exists {
 		delete(h.flows, id)
+		now := time.Now()
+		h.closedFlows[id] = now.Add(maxDuration(2*h.unavailableTimeout, time.Minute))
+		h.pruneClosedFlowsLocked(now)
 		h.stats.streams.Add(-1)
 	}
 	h.mu.Unlock()
+}
+
+func (h *fusionHub) closedFlow(id uint32) bool {
+	now := time.Now()
+	h.mu.Lock()
+	expires, exists := h.closedFlows[id]
+	if exists && !now.Before(expires) {
+		delete(h.closedFlows, id)
+		exists = false
+	}
+	h.mu.Unlock()
+	return exists
+}
+
+func (h *fusionHub) pruneClosedFlowsLocked(now time.Time) {
+	if len(h.closedFlows) <= 4096 {
+		return
+	}
+	for id, expires := range h.closedFlows {
+		if !now.Before(expires) {
+			delete(h.closedFlows, id)
+		}
+	}
+	for id := range h.closedFlows {
+		if len(h.closedFlows) <= 4096 {
+			break
+		}
+		delete(h.closedFlows, id)
+	}
 }
 
 func (h *fusionHub) flowSnapshotLocked() []*fusionFlow {
@@ -337,7 +367,7 @@ func (h *fusionHub) flowSnapshotLocked() []*fusionFlow {
 func (h *fusionHub) nextFlowID() uint32 {
 	for {
 		id := h.nextID.Add(2)
-		if id != 0 && h.getFlow(id) == nil {
+		if id != 0 && h.getFlow(id) == nil && !h.closedFlow(id) {
 			return id
 		}
 	}

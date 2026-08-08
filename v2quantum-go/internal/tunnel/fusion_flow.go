@@ -377,6 +377,10 @@ func (h *fusionHub) handleRemoteOpen(frame protocol.Frame) {
 		existing.replayPending()
 		return
 	}
+	if h.closedFlow(frame.StreamID) {
+		_ = h.send(protocol.Frame{Type: protocol.FusionClose, StreamID: frame.StreamID, Payload: fusionOffsetPayload(0)})
+		return
+	}
 	mapping := string(frame.Payload)
 	target, exists := h.targets[mapping]
 	if !exists {

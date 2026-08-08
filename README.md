@@ -20,7 +20,7 @@ duplicate top-level engines:
 |---|---|---|
 | Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX and AnyTLS |
 | XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, 15-second transport watchdog, staged recovery and rollback |
-| V2Quantum | Independent MIT-licensed Go core | TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
+| V2Quantum | Independent MIT-licensed Go core | FusionMux failover, TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
 | Realm | External open-source Realm manager | TCP and UDP layer-4 port forwarding |
 
 The launcher itself, V2Quantum and Realm do not use Pengu or Dagger licensed
@@ -41,17 +41,31 @@ Useful direct actions:
 tunnel-manager --backhaul
 tunnel-manager --xwsmux-max
 tunnel-manager --v2quantum
+tunnel-manager --fusion
 tunnel-manager --tun
 tunnel-manager --realm
 tunnel-manager --status
 ```
 
-Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
+Direct FusionMux installer/menu:
+
+```bash
+bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/fusionmux-oneclick.sh)
+```
+
+Every new V2Quantum/FusionMux/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second
 tunnel therefore does not replace the first one. Setup codes use `V2Q3_` for
-reverse TCP mappings and `V2T2_` for the independent point-to-point TUN. The
+single-carrier reverse TCP mappings, `V2F1_` for Quantum/WebSocket/TCP FusionMux,
+and `V2T2_` for the independent point-to-point TUN. The
 manager accepts the older prefixes for migration, but both peers must run the
 new core before using the Quantum v2 wire protocol.
+
+FusionMux keeps all three authenticated paths hot. Quantum UDP is primary,
+WebSocket/WSS is the first standby and direct TCP is the final fallback. Logical
+streams carry byte offsets and cumulative acknowledgements, so unacknowledged
+data can be replayed and deduplicated on another path while the user's existing
+TCP connection remains open. This is failover, not bandwidth aggregation.
 
 The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
 as working. The menu's supported L3 option is the source-built V2TUN core; it

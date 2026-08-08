@@ -51,6 +51,6 @@ jobs:
 
       - name: Verify release payload
         run: |
-          make release VERSION=0.3.0
+          make release VERSION=0.4.0
           cd dist
           sha256sum -c SHA256SUMS

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-INSTALLER_VERSION="0.3.0"
+INSTALLER_VERSION="0.4.0"
 OVERRIDE_REPO="${V2QUANTUM_REPO:-}"
 OVERRIDE_REF="${V2QUANTUM_REF:-}"
 OVERRIDE_VERSION="${V2QUANTUM_VERSION:-}"
@@ -15,7 +15,7 @@ fi
 [[ -n "$OVERRIDE_VERSION" ]] && V2QUANTUM_VERSION="$OVERRIDE_VERSION"
 REPO="${V2QUANTUM_REPO:-V2grop/backhaul-oneclick}"
 REF="${V2QUANTUM_REF:-main}"
-CORE_VERSION="${V2QUANTUM_VERSION:-0.3.0}"
+CORE_VERSION="${V2QUANTUM_VERSION:-0.4.0}"
 GO_VERSION="1.26.5"
 ACTION="install"
 OPEN_MENU=true
@@ -325,6 +325,9 @@ ok "V2Quantum installed from $INSTALLED_FROM"
 if [[ "$OPEN_MENU" == true ]]; then
   if [[ "${V2QUANTUM_MANAGER_MODE:-}" == "tun" ]]; then
     exec /usr/local/sbin/v2quantum-manager --tun
+  fi
+  if [[ "${V2QUANTUM_MANAGER_MODE:-}" == "fusion" ]]; then
+    exec /usr/local/sbin/v2quantum-manager --fusion
   fi
   exec /usr/local/sbin/v2quantum-manager
 fi

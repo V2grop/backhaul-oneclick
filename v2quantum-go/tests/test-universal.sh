@@ -86,6 +86,7 @@ COMMON_ENV=(
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --help >"$TMP_DIR/help.txt"
 grep -q -- '--xwsmux-max' "$TMP_DIR/help.txt"
 grep -q -- '--v2quantum' "$TMP_DIR/help.txt"
+grep -q -- '--fusion' "$TMP_DIR/help.txt"
 grep -q -- '--tun' "$TMP_DIR/help.txt"
 grep -q -- '--realm' "$TMP_DIR/help.txt"
 
@@ -94,6 +95,7 @@ env "${COMMON_ENV[@]}" \
   TUNNEL_MANAGER_XWSMUX_MAX_URL=https://invalid.example/missing-xwsmux.sh \
   bash "$LAUNCHER" --xwsmux-max >/dev/null 2>&1
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --v2quantum >/dev/null
+env "${COMMON_ENV[@]}" bash "$LAUNCHER" --fusion >/dev/null
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --tun >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 
@@ -101,6 +103,7 @@ grep -qx 'backhaul' "$LOG"
 grep -qx 'xwsmux' "$LOG"
 grep -qx 'realm' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:all' "$LOG"
+grep -qx 'v2quantum:codex/v2quantum-go-v1:1:fusion' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:tun' "$LOG"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --status >"$TMP_DIR/status.txt"
@@ -112,6 +115,7 @@ grep -q 'Pengu and Dagger licensed binaries are not bundled' "$TMP_DIR/capabilit
 grep -q 'quantum_udp is the carrier' "$TMP_DIR/capabilities.txt"
 grep -q 'assigned-IP ICMP scanning' "$TMP_DIR/capabilities.txt"
 grep -q 'separate working L3 TUN' "$TMP_DIR/capabilities.txt"
+grep -q 'FusionMux Pro' "$TMP_DIR/capabilities.txt"
 grep -q 'mirrors.aliyun.com/golang' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 grep -q 'golang.google.cn/dl' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 
@@ -122,7 +126,7 @@ test ! -e "$SHORTCUT"
 
 printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
-grep -q '2) V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
+grep -q '2) V2Quantum - FusionMux / Quantum / TCP / Raw spoof-BIP' "$TMP_DIR/menu.txt"
 grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2

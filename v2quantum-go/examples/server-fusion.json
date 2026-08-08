@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "role": "server",
+  "node_name": "iran-fusion",
+  "carrier": {
+    "mode": "fusion",
+    "pool": 1,
+    "keepalive_seconds": 5,
+    "dial_timeout_seconds": 5,
+    "reconnect_min_millis": 300,
+    "reconnect_max_millis": 8000,
+    "max_streams_per_session": 1024,
+    "fusion": {
+      "policy": "failover",
+      "unavailable_timeout_seconds": 20,
+      "recovery_hold_seconds": 15,
+      "replay_buffer_bytes": 8388608,
+      "paths": [
+        {
+          "name": "quantum",
+          "mode": "quantum_udp",
+          "listen": "0.0.0.0:8890",
+          "priority": 10,
+          "pool": 2,
+          "quantum": {"profile": "balanced", "auto_tune": true}
+        },
+        {
+          "name": "websocket",
+          "mode": "websocket",
+          "listen": "0.0.0.0:8891",
+          "priority": 20,
+          "pool": 2,
+          "websocket": {"path": "/v2q-fusion"}
+        },
+        {
+          "name": "tcp",
+          "mode": "tcp",
+          "listen": "0.0.0.0:8892",
+          "priority": 30,
+          "pool": 1
+        }
+      ]
+    }
+  },
+  "security": {"psk_env": "V2QUANTUM_PSK"},
+  "mappings": [
+    {"name": "panel", "protocol": "tcp", "listen": "0.0.0.0:2445"}
+  ],
+  "health": {"listen": "127.0.0.1:19090", "allow_public_listen": false},
+  "logging": {"level": "info", "json": false}
+}

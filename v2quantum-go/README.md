@@ -5,7 +5,9 @@
 ## قابلیت‌ها
 
 - Reverse TCP forwarding با چند mapping نام‌دار و محدودشده؛ سرور نمی‌تواند مقصد دلخواه روی کلاینت باز کند.
-- سه carrier مستقل: `tcp`، `quantum_udp` و `raw_icmp` آزمایشی.
+- سه carrier مستقل: `tcp`، `quantum_udp` و `raw_icmp` آزمایشی، به‌علاوهٔ موتور ترکیبی `fusion`.
+- FusionMux Pro با سه مسیر hot به‌ترتیب Quantum UDP، WebSocket/WSS و TCP؛ سوییچ خودکار مسیر بدون ساخت دوبارهٔ اتصال کاربر.
+- logical stream مستقل از carrier با offset بایت، ACK تجمعی، dedup/reorder و replay محدود برای ادامهٔ اتصال باز پس از قطع مسیر.
 - TUN مستقل لایهٔ ۳ روی carrierهای TCP یا Quantum UDP با interface مجزا برای هر نمونه.
 - Multiplex چند صد stream روی pool اتصال‌ها با انتخاب کم‌بارترین session.
 - احراز هویت دوطرفه PSK با nonce تصادفی و HMAC-SHA256.
@@ -14,7 +16,7 @@
 - reconnect با exponential backoff و jitter، keepalive داخلی و راه‌اندازی مجدد توسط systemd.
 - health endpoint جدا برای هر instance روی loopback (مدیر معمولاً از پورت `19090` به بعد انتخاب می‌کند) و metrics سازگار با Prometheus روی `/metrics`.
 - Raw ICMP با packet IPv4 واقعی، checksum، `IP_HDRINCL`، تنظیم interface، MTU و source/destination override کنترل‌شده.
-- تولید خودکار setup code در ایران؛ `V2Q3_` برای reverse port و `V2T2_` برای TUN لایهٔ ۳؛ کدهای قدیمی نیز برای مهاجرت خوانده می‌شوند.
+- تولید خودکار setup code در ایران؛ `V2F1_` برای FusionMux، `V2Q3_` برای reverse port تک‌مسیره و `V2T2_` برای TUN لایهٔ ۳؛ کدهای قدیمی نیز برای مهاجرت خوانده می‌شوند.
 - نصب/آپدیت/حذف تک‌خطی، backup خودکار تنظیمات، بررسی تداخل پورت و پشتیبانی از چند mapping.
 - پشتیبانی واقعی از چند tunnel هم‌زمان؛ هر نمونه نام، config، health port، سرویس و watchdog مستقل دارد و نمونهٔ قبلی overwrite نمی‌شود.
 - watchdog سه‌مرحله‌ای سمت خارج؛ سه healthcheck ناموفق متوالی باعث restart سرویس می‌شود.
@@ -27,6 +29,7 @@
 | `tcp` | بیشترین سازگاری و پایداری | یک پورت TCP | Production |
 | `quantum_udp` | مسیرهایی که UDP بهتر از TCP جواب می‌دهد | یک پورت UDP | Production |
 | `raw_icmp` | شبکه آزمایشی، BIP یا مسیر ICMP مجاز | root/CAP_NET_RAW و ICMP دوطرفه | Experimental |
+| `fusion` | پایداری بالاتر با failover بین سه مسیر | UDP + دو پورت TCP، یا WSS/CDN | Production candidate |
 
 برای شروع `quantum_udp` را امتحان کنید و اگر UDP در مسیر مسدود یا شدیداً rate-limit بود `tcp` را انتخاب کنید. Quantum v2 برای loss و reorder طراحی شده، اما هیچ نرم‌افزاری نمی‌تواند RTT فیزیکی route را کمتر کند. Raw ICMP الزاماً ping را پایین نمی‌آورد و نتیجه به route، فیلترینگ ICMP و سیاست دیتاسنتر بستگی دارد.
 
@@ -44,6 +47,28 @@ Quantum v2 یک پیاده‌سازی مستقل Go است و از باینری 
 
 پروفایل Balanced پیش‌فرض و پیشنهادشده است: Stable از FEC `6+2`، Balanced از `8+2` و Max از `10+1` استفاده می‌کند. Stable تحمل loss بیشتری دارد و Max سربار کمتر همراه پنجره و buffer بزرگ‌تر برای پهنای باند بالا می‌دهد. هر دو سمت باید هستهٔ `0.3.x` یا جدیدتر داشته باشند؛ Quantum v2 عمداً با پروتکل بستهٔ Dagger یا Leech wire-compatible نیست و هیچ باینری یا لایسنس آن‌ها را نیاز ندارد.
 
+## معماری FusionMux Pro
+
+FusionMux پهنای باند سه carrier را با هم جمع نمی‌کند؛ در نسخهٔ `0.4.0` سیاست آن failover است تا ترتیب بایت‌ها و رفتار TCP قابل پیش‌بینی بماند. هر مسیر از ابتدا وصل و احراز هویت می‌شود، ولی مسیر با عدد priority کمتر برای داده انتخاب می‌شود:
+
+| Priority | Path | وظیفه |
+|---:|---|---|
+| 10 | `quantum_udp` | مسیر اصلی با recovery مخصوص loss/reorder |
+| 20 | `websocket` | آماده‌به‌کار مستقیم یا WSS پشت Cloudflare/reverse proxy |
+| 30 | `tcp` | fallback سازگار برای زمانی که UDP و WebSocket در دسترس نیستند |
+
+هر اتصال TCP کاربر به یک logical stream با شناسهٔ ثابت تبدیل می‌شود. برای هر جهت، فرستنده offset بایت و یک replay buffer محدود نگه می‌دارد. گیرنده پس از تحویل بایت‌های پیوسته ACK تجمعی می‌فرستد و دادهٔ تکراری را حذف می‌کند. هنگام قطع مسیر، hub مسیر سالم بعدی را primary می‌کند، پیام Open همان stream را idempotent تکرار می‌کند و فقط بایت‌های ACKنشده را replay می‌نماید. بنابراین socket کاربر و socket مقصد باز می‌مانند. tombstone محدود نیز مانع می‌شود یک Open بسیار دیررس، اتصال بسته‌شده‌ای را دوباره روی مقصد باز کند.
+
+پارامترهای اصلی:
+
+- `unavailable_timeout_seconds`: مدت نگهداری اتصال باز وقتی هیچ‌کدام از مسیرها حاضر نیستند؛ پس از آن stream بسته می‌شود.
+- `recovery_hold_seconds`: وقتی مسیر بهتر برمی‌گردد، قبل از برگشت primary صبر می‌کند تا flapping باعث رفت‌وبرگشت پی‌درپی نشود.
+- `replay_buffer_bytes`: حداکثر دادهٔ ACKنشده برای هر stream؛ پرشدن آن backpressure ایجاد می‌کند و RAM نامحدود مصرف نمی‌شود.
+- `priority`: عدد کمتر بهتر است؛ پیش‌فرض‌ها 10/20/30 هستند.
+- `pool`: تعداد اتصال hot همان path در سمت خارج؛ Balanced برای Quantum و WebSocket دو اتصال و برای TCP یک اتصال می‌سازد.
+
+keepalive قطعی path را تشخیص می‌دهد، reconnect هر path مستقل است و systemd/watchdog کل instance را فقط وقتی healthcheck چند بار متوالی شکست بخورد restart می‌کنند. برگشت یک path بهتر با recovery hold انجام می‌شود؛ failover از path مرده فوری است.
+
 ## Build و تست
 
 Go 1.24 یا جدیدتر پیشنهاد می‌شود:
@@ -58,7 +83,7 @@ make build
 ساخت release برای Linux amd64 و arm64:
 
 ```bash
-make release VERSION=0.3.0
+make release VERSION=0.4.0
 ```
 
 ## نصب تک‌خطی
@@ -84,6 +109,24 @@ bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-onecl
 3. خارج: گزینه `2` و Paste همان setup code؛ مقصد پیش‌فرض `127.0.0.1:2444` است.
 4. در firewall ایران، `8890/udp` و `2445/tcp` باید باز باشند. خارج فقط اتصال خروجی به `8890/udp` نیاز دارد.
 5. در لینک VLESS فقط پورت ورودی ایران را به `2445` تغییر دهید؛ Xray خارج همچنان روی `2444` می‌ماند.
+
+## راه‌اندازی FusionMux با منوی ساده
+
+بعد از نصب، اجرا کنید:
+
+```bash
+v2quantum-manager --fusion
+```
+
+یا مستقیماً نصب و منوی FusionMux را باز کنید:
+
+```bash
+bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/fusionmux-oneclick.sh)
+```
+
+در ایران گزینهٔ ساخت را انتخاب کنید. مدیر token را خودکار می‌سازد، پورت mapping و سه carrier را می‌پرسد و یک کد `V2F1_` تحویل می‌دهد. در خارج همان منو را باز و فقط کد را Paste کنید؛ مقصد پیش‌فرض `127.0.0.1:2444` است. هر اجرای جدید نام جدا، فایل JSON/ENV جدا، health port جدا و systemd/watchdog جدا دارد و تونل قبلی حذف یا overwrite نمی‌شود.
+
+در حالت Direct باید پورت Quantum به‌صورت UDP و پورت‌های WebSocket/TCP/mapping به‌صورت TCP روی ایران باز باشند. حالت Cloudflare/WSS دو آدرس جدا دارد: edge عمومی مانند `domain:443` و origin listen محلی. Cloudflare، Tunnel، Origin Rule یا reverse proxy شما باید edge و path انتخابی را به همان origin port بفرستد؛ هسته حساب Cloudflare را تغییر نمی‌دهد. TLS در edge خاتمه می‌یابد و SNI/Host سمت خارج verify می‌شود؛ `insecure_skip_verify` در setup خودکار خاموش است.
 
 برای چند پورت، در ایران پورت‌ها را با کاما وارد کنید؛ برای مثال `2445,2446,2447`. خارج باید همان تعداد target را به همان ترتیب بدهد. مدیر برای هر تونل نامی مانند `iran-main` و `outside-main` می‌سازد؛ سرویس‌ها نیز به‌شکل `v2quantum@iran-main.service` و `v2quantum-watchdog@outside-main.timer` هستند. systemd با `Restart=always` جای cron را می‌گیرد و خود هسته نیز reconnect با backoff و jitter دارد.
 
@@ -136,7 +179,7 @@ export V2QUANTUM_PSK="$(./bin/v2quantum keygen)"
 ./bin/v2quantum run -config examples/client-quantum-udp.json
 ```
 
-نمونه‌های TCP، Quantum، Raw و TUN در پوشه `examples/` هستند. هر دو سمت باید PSK و carrier سازگار داشته باشند؛ در reverse-port نام mappingها نیز باید یکسان باشد.
+نمونه‌های TCP، Quantum، FusionMux، Raw و TUN در پوشه `examples/` هستند. هر دو سمت باید PSK و carrier سازگار داشته باشند؛ در reverse-port نام mappingها نیز باید یکسان باشد.
 
 ## Raw ICMP، spoofing و BIP
 
@@ -188,6 +231,8 @@ sudo v2quantum spoof-scan -peer PEER_REAL_IPV4 -json
 - unit test پروتکل، config، checksum، FEC، SACK و رمزنگاری.
 - ردشدن PSK اشتباه و حفاظت sequence رکوردها.
 - انتقال سرتاسری هم‌زمان روی TCP و Quantum v2 UDP، شامل loss، reorder، fast recovery و انتقال دوطرفه.
+- اتصال واقعی FusionMux روی Quantum UDP، WebSocket و TCP؛ قطع مسیر Quantum در حالی که stream باز است و ادامهٔ همان stream روی WebSocket.
+- تست مستقل دو failover متوالی روی یک اتصال باز: Quantum → WebSocket → TCP، با بررسی صحت کامل payload و شمارنده‌ها.
 - انتقال دوطرفهٔ بستهٔ IP در TUN روی carrier رمز‌شده با interface آزمایشی in-memory.
 - Raw packet loopback، Quantum روی Raw ICMP و reverse tunnel رمز‌شده روی Raw ICMP.
 - نصب ایزوله، نگهداری فایل‌های Backhaul، rollback تنظیمات در خطای start و حذف با `y` کوچک.

@@ -247,14 +247,53 @@ select_tun_profile() {
   esac
 }
 
+apply_fusion_profile() {
+  PROFILE_NAME="$1"
+  case "$PROFILE_NAME" in
+    stable)
+      POOL=1 KEEPALIVE=8 DIAL_TIMEOUT=7 RECONNECT_MIN=500 RECONNECT_MAX=12000 MAX_STREAMS=512
+      FUSION_QUANTUM_POOL=1 FUSION_WEBSOCKET_POOL=1 FUSION_TCP_POOL=1
+      FUSION_UNAVAILABLE=30 FUSION_RECOVERY_HOLD=20 FUSION_REPLAY_BYTES=$((4 << 20))
+      ;;
+    balanced)
+      POOL=1 KEEPALIVE=5 DIAL_TIMEOUT=5 RECONNECT_MIN=300 RECONNECT_MAX=8000 MAX_STREAMS=1024
+      FUSION_QUANTUM_POOL=2 FUSION_WEBSOCKET_POOL=2 FUSION_TCP_POOL=1
+      FUSION_UNAVAILABLE=20 FUSION_RECOVERY_HOLD=15 FUSION_REPLAY_BYTES=$((8 << 20))
+      ;;
+    max)
+      POOL=1 KEEPALIVE=3 DIAL_TIMEOUT=4 RECONNECT_MIN=200 RECONNECT_MAX=5000 MAX_STREAMS=2048
+      FUSION_QUANTUM_POOL=3 FUSION_WEBSOCKET_POOL=2 FUSION_TCP_POOL=2
+      FUSION_UNAVAILABLE=15 FUSION_RECOVERY_HOLD=10 FUSION_REPLAY_BYTES=$((16 << 20))
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+select_fusion_profile() {
+  local choice
+  echo "1) Stable    low resource use, conservative recovery" >&2
+  echo "2) Balanced  hot Quantum + WebSocket standby (recommended)" >&2
+  echo "3) Max       more hot paths and a larger replay window" >&2
+  choice="$(prompt_default "FusionMux profile" "2")"
+  case "${choice,,}" in
+    1|stable) printf 'stable' ;;
+    2|balanced|default) printf 'balanced' ;;
+    3|max|maximum) printf 'max' ;;
+    *) error "Unknown FusionMux profile."; return 1 ;;
+  esac
+}
+
 csv_ports() {
   local input="$1" item
   local -n output="$2"
+  local -A seen=()
   input="$(printf '%s' "$input" | tr -d '[:space:]')"
   IFS=',' read -r -a output <<<"$input"
   (( ${#output[@]} > 0 && ${#output[@]} <= 32 )) || return 1
   for item in "${output[@]}"; do
     valid_port "$item" || return 1
+    [[ -z "${seen[$item]:-}" ]] || return 1
+    seen[$item]=1
   done
 }
 
@@ -316,6 +355,56 @@ parse_setup_code() {
   valid_port "$CODE_PORT" || return 1
   [[ "$CODE_COUNT" =~ ^[0-9]+$ ]] && (( CODE_COUNT >= 1 && CODE_COUNT <= 32 )) || return 1
 	apply_profile "$CODE_PROFILE" || return 1
+}
+
+valid_endpoint() {
+  local value="$1" host port
+  safe_value "$value" || return 1
+  [[ "$value" == *:* ]] || return 1
+  host="${value%:*}"
+  port="${value##*:}"
+  [[ -n "$host" ]] && valid_port "$port"
+}
+
+valid_host() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]]
+}
+
+valid_ws_path() {
+  local value="$1"
+  safe_value "$value" && [[ "$value" == /* && ${#value} -le 128 && "$value" != *'?'* && "$value" != *'#'* ]]
+}
+
+make_fusion_setup_code() {
+  local token="$1" public_host="$2" quantum_port="$3" ws_endpoint="$4" ws_host="$5"
+  local ws_tls="$6" ws_path="$7" tcp_port="$8" public_ports="$9" profile="${10}"
+  local count="${11}" label="${12}"
+  printf 'V2F1_%s' "$(printf '%s' "$token|$public_host|$quantum_port|$ws_endpoint|$ws_host|$ws_tls|$ws_path|$tcp_port|$public_ports|$profile|$count|$label" | base64url_encode)"
+}
+
+parse_fusion_setup_code() {
+  local code="$1" decoded extra
+  [[ "$code" == V2F1_* ]] || return 1
+  decoded="$(base64url_decode "${code#V2F1_}")" || return 1
+  IFS='|' read -r FUSION_CODE_TOKEN FUSION_CODE_HOST FUSION_CODE_QUANTUM_PORT \
+    FUSION_CODE_WS_ENDPOINT FUSION_CODE_WS_HOST FUSION_CODE_WS_TLS FUSION_CODE_WS_PATH \
+    FUSION_CODE_TCP_PORT FUSION_CODE_PUBLIC_PORTS FUSION_CODE_PROFILE FUSION_CODE_COUNT \
+    FUSION_CODE_LABEL extra <<<"$decoded"
+  [[ -z "$extra" ]] || return 1
+  valid_token "$FUSION_CODE_TOKEN" || return 1
+  valid_host "$FUSION_CODE_HOST" || return 1
+  valid_port "$FUSION_CODE_QUANTUM_PORT" || return 1
+  valid_endpoint "$FUSION_CODE_WS_ENDPOINT" || return 1
+  [[ "$FUSION_CODE_WS_HOST" == "-" ]] || valid_host "$FUSION_CODE_WS_HOST" || return 1
+  [[ "$FUSION_CODE_WS_TLS" == "0" || "$FUSION_CODE_WS_TLS" == "1" ]] || return 1
+  valid_ws_path "$FUSION_CODE_WS_PATH" || return 1
+  valid_port "$FUSION_CODE_TCP_PORT" || return 1
+  [[ "$FUSION_CODE_COUNT" =~ ^[0-9]+$ ]] && (( FUSION_CODE_COUNT >= 1 && FUSION_CODE_COUNT <= 32 )) || return 1
+  safe_label "$FUSION_CODE_LABEL" || return 1
+  apply_fusion_profile "$FUSION_CODE_PROFILE" || return 1
+  local decoded_ports=()
+  csv_ports "$FUSION_CODE_PUBLIC_PORTS" decoded_ports || return 1
+  (( ${#decoded_ports[@]} == FUSION_CODE_COUNT ))
 }
 
 make_tun_setup_code() {
@@ -545,6 +634,80 @@ write_instance() {
   activate_instance "$role" "$instance" "$token" "$config_tmp" "$env_tmp"
 }
 
+write_fusion_instance() {
+  local role="$1" instance="$2" token="$3" health_port="$4"
+  local quantum_value="$5" websocket_value="$6" websocket_host="$7" websocket_tls="$8"
+  local websocket_path="$9" tcp_value="${10}"
+  local -n values="${11}"
+  local config_tmp env_tmp i comma endpoint ws_host_json="" ws_sni_json=""
+  config_tmp="$(mktemp "$CONFIG_DIR/.${instance}.json.XXXXXX")"
+  env_tmp="$(mktemp "$CONFIG_DIR/.${instance}.env.XXXXXX")"
+
+  printf 'V2QUANTUM_PSK=%s\n' "$token" >"$env_tmp"
+  chmod 600 "$env_tmp"
+  if [[ "$websocket_host" != "-" ]]; then
+    ws_host_json=", \"host\": \"$websocket_host\""
+    [[ "$websocket_tls" == "true" ]] && ws_sni_json=", \"server_name\": \"$websocket_host\""
+  fi
+  {
+    printf '{\n'
+    printf '  "version": 1,\n'
+    printf '  "role": "%s",\n' "$role"
+    printf '  "node_name": "%s",\n' "$instance"
+    printf '  "carrier": {\n'
+    printf '    "mode": "fusion",\n'
+    printf '    "pool": 1,\n'
+    printf '    "keepalive_seconds": %s,\n' "$KEEPALIVE"
+    printf '    "dial_timeout_seconds": %s,\n' "$DIAL_TIMEOUT"
+    printf '    "reconnect_min_millis": %s,\n' "$RECONNECT_MIN"
+    printf '    "reconnect_max_millis": %s,\n' "$RECONNECT_MAX"
+    printf '    "max_streams_per_session": %s,\n' "$MAX_STREAMS"
+    printf '    "fusion": {\n'
+    printf '      "policy": "failover",\n'
+    printf '      "unavailable_timeout_seconds": %s,\n' "$FUSION_UNAVAILABLE"
+    printf '      "recovery_hold_seconds": %s,\n' "$FUSION_RECOVERY_HOLD"
+    printf '      "replay_buffer_bytes": %s,\n' "$FUSION_REPLAY_BYTES"
+    printf '      "paths": [\n'
+    if [[ "$role" == "server" ]]; then
+      printf '        {"name": "quantum", "mode": "quantum_udp", "listen": "0.0.0.0:%s", "priority": 10, "pool": %s, "quantum": {"profile": "%s", "auto_tune": true}},\n' \
+        "$quantum_value" "$FUSION_QUANTUM_POOL" "$PROFILE_NAME"
+      printf '        {"name": "websocket", "mode": "websocket", "listen": "0.0.0.0:%s", "priority": 20, "pool": %s, "websocket": {"path": "%s"}},\n' \
+        "$websocket_value" "$FUSION_WEBSOCKET_POOL" "$websocket_path"
+      printf '        {"name": "tcp", "mode": "tcp", "listen": "0.0.0.0:%s", "priority": 30, "pool": %s}\n' \
+        "$tcp_value" "$FUSION_TCP_POOL"
+    else
+      printf '        {"name": "quantum", "mode": "quantum_udp", "server": "%s", "priority": 10, "pool": %s, "quantum": {"profile": "%s", "auto_tune": true}},\n' \
+        "$quantum_value" "$FUSION_QUANTUM_POOL" "$PROFILE_NAME"
+      printf '        {"name": "websocket", "mode": "websocket", "server": "%s", "priority": 20, "pool": %s, "websocket": {"path": "%s", "tls": %s%s%s, "insecure_skip_verify": false}},\n' \
+        "$websocket_value" "$FUSION_WEBSOCKET_POOL" "$websocket_path" "$websocket_tls" "$ws_host_json" "$ws_sni_json"
+      printf '        {"name": "tcp", "mode": "tcp", "server": "%s", "priority": 30, "pool": %s}\n' \
+        "$tcp_value" "$FUSION_TCP_POOL"
+    fi
+    printf '      ]\n'
+    printf '    }\n'
+    printf '  },\n'
+    printf '  "security": {"psk_env": "V2QUANTUM_PSK"},\n'
+    printf '  "mappings": [\n'
+    for i in "${!values[@]}"; do
+      comma=','
+      (( i == ${#values[@]} - 1 )) && comma=''
+      if [[ "$role" == "server" ]]; then
+        endpoint="\"listen\": \"0.0.0.0:${values[$i]}\""
+      else
+        endpoint="\"target\": \"${values[$i]}\""
+      fi
+      printf '    {"name": "map-%s", "protocol": "tcp", %s}%s\n' "$((i + 1))" "$endpoint" "$comma"
+    done
+    printf '  ],\n'
+    printf '  "health": {"listen": "127.0.0.1:%s", "allow_public_listen": false},\n' "$health_port"
+    printf '  "logging": {"level": "info", "json": false}\n'
+    printf '}\n'
+  } >"$config_tmp"
+  chmod 640 "$config_tmp"
+
+  activate_instance "$role" "$instance" "$token" "$config_tmp" "$env_tmp"
+}
+
 write_tun_instance() {
   local role="$1" instance="$2" mode="$3" token="$4" health_port="$5" carrier_value="$6"
   local local_cidr="$7" peer_ip="$8" mtu="$9"
@@ -644,6 +807,153 @@ open_firewall_carrier() {
   fi
 }
 
+open_firewall_fusion() {
+  local quantum_port="$1" websocket_port="$2" tcp_port="$3" item
+  local -n ports_ref="$4"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+    ufw allow "$quantum_port/udp" >/dev/null
+    ufw allow "$websocket_port/tcp" >/dev/null
+    ufw allow "$tcp_port/tcp" >/dev/null
+    for item in "${ports_ref[@]}"; do ufw allow "$item/tcp" >/dev/null; done
+    ok "UFW rules added for all FusionMux paths."
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port="$quantum_port/udp" >/dev/null
+    firewall-cmd --permanent --add-port="$websocket_port/tcp" >/dev/null
+    firewall-cmd --permanent --add-port="$tcp_port/tcp" >/dev/null
+    for item in "${ports_ref[@]}"; do firewall-cmd --permanent --add-port="$item/tcp" >/dev/null; done
+    firewall-cmd --reload >/dev/null
+    ok "firewalld rules added for all FusionMux paths."
+  else
+    warn "No active UFW/firewalld detected. Allow UDP $quantum_port, TCP $websocket_port/$tcp_port, and the public mapping ports in the provider firewall."
+  fi
+}
+
+configure_fusion_server() {
+  local profile token public_host public_input public_port health_port instance label setup_code
+  local quantum_port websocket_port tcp_port ws_mode ws_endpoint ws_host ws_tls ws_path domain
+  local public_ports=()
+
+  echo
+  printf '%sFusionMux Pro: Quantum primary + WebSocket standby + TCP fallback%s\n' "$cyan" "$reset"
+  echo "All three paths stay connected. Existing TCP streams resume on the next path after a failure."
+  profile="$(select_fusion_profile)" || return 1
+  apply_fusion_profile "$profile"
+  token="$($BIN keygen)"
+  valid_token "$token" || { error "Token generation failed."; return 1; }
+
+  public_input="$(prompt_default "Public TCP port(s), comma-separated" "$(find_free_port tcp 2445)")"
+  csv_ports "$public_input" public_ports || { error "Invalid public port list."; return 1; }
+  for public_port in "${public_ports[@]}"; do
+    if port_is_listening tcp "$public_port"; then
+      confirm "Public port $public_port/tcp is already listening. Continue anyway?" || return 1
+    fi
+  done
+
+  public_host="$(prompt_default "Iran public IPv4 or hostname" "$(detect_public_ipv4)")"
+  valid_host "$public_host" || { error "Enter an IPv4 address or hostname without a port."; return 1; }
+  quantum_port="$(prompt_default "Quantum UDP port (primary)" "$(find_free_port udp 8890)")"
+  valid_port "$quantum_port" || { error "Invalid Quantum port."; return 1; }
+  tcp_port="$(prompt_default "Direct TCP port (last fallback)" "$(find_free_port tcp 8892)")"
+  valid_port "$tcp_port" || { error "Invalid TCP fallback port."; return 1; }
+
+  echo "1) Direct WebSocket - no CDN configuration required" >&2
+  echo "2) Cloudflare/WSS - requires your domain to route the edge endpoint to this origin port" >&2
+  ws_mode="$(prompt_default "WebSocket path type" "1")"
+  ws_path="$(prompt_default "WebSocket URL path" "/v2q-fusion")"
+  valid_ws_path "$ws_path" || { error "Invalid WebSocket path."; return 1; }
+  case "${ws_mode,,}" in
+    1|direct|ws)
+      websocket_port="$(prompt_default "Direct WebSocket TCP port" "$(find_free_port tcp 8891)")"
+      valid_port "$websocket_port" || { error "Invalid WebSocket port."; return 1; }
+      ws_endpoint="$public_host:$websocket_port"
+      ws_host="-"
+      ws_tls=0
+      ;;
+    2|cloudflare|cdn|wss)
+      domain="$(prompt_default "Cloudflare hostname (orange-cloud DNS)" "tunnel.example.com")"
+      valid_host "$domain" || { error "Invalid Cloudflare hostname."; return 1; }
+      ws_endpoint="$(prompt_default "Public Cloudflare WSS endpoint" "$domain:443")"
+      valid_endpoint "$ws_endpoint" || { error "Invalid Cloudflare endpoint."; return 1; }
+      websocket_port="$(prompt_default "Origin WebSocket listen port" "$(find_free_port tcp 8080)")"
+      valid_port "$websocket_port" || { error "Invalid origin WebSocket port."; return 1; }
+      ws_host="$domain"
+      ws_tls=1
+      warn "Cloudflare must forward $ws_endpoint$ws_path to this server on TCP $websocket_port. The V2Quantum origin listener is plain WebSocket; TLS terminates at Cloudflare or your reverse proxy."
+      ;;
+    *) error "Unknown WebSocket path type."; return 1 ;;
+  esac
+
+  [[ "$quantum_port" != "$tcp_port" && "$quantum_port" != "$websocket_port" && "$tcp_port" != "$websocket_port" ]] || {
+    error "Quantum, WebSocket and TCP carrier ports must be different."
+    return 1
+  }
+  for public_port in "${public_ports[@]}"; do
+    if [[ "$public_port" == "$websocket_port" || "$public_port" == "$tcp_port" ]]; then
+      error "Public mapping port $public_port conflicts with a FusionMux TCP carrier port."
+      return 1
+    fi
+  done
+  if port_is_listening udp "$quantum_port"; then
+    confirm "Port $quantum_port/udp is already listening. Continue anyway?" || return 1
+  fi
+  if port_is_listening tcp "$websocket_port"; then
+    confirm "Port $websocket_port/tcp is already listening. Continue anyway?" || return 1
+  fi
+  if port_is_listening tcp "$tcp_port"; then
+    confirm "Port $tcp_port/tcp is already listening. Continue anyway?" || return 1
+  fi
+
+  health_port="$(find_free_port tcp 19090)"
+  instance="$(new_instance iran "fusion-${public_ports[0]}")"
+  label="${instance#iran-}"
+  write_fusion_instance server "$instance" "$token" "$health_port" "$quantum_port" \
+    "$websocket_port" "$ws_host" false "$ws_path" "$tcp_port" public_ports || return 1
+  open_firewall_fusion "$quantum_port" "$websocket_port" "$tcp_port" public_ports
+  setup_code="$(make_fusion_setup_code "$token" "$public_host" "$quantum_port" "$ws_endpoint" \
+    "$ws_host" "$ws_tls" "$ws_path" "$tcp_port" "$(IFS=,; echo "${public_ports[*]}")" \
+    "$profile" "${#public_ports[@]}" "$label")"
+
+  echo
+  printf '%sCOPY THIS FUSION SETUP CODE TO THE OUTSIDE SERVER:%s\n' "$cyan" "$reset"
+  printf '%s\n' "$setup_code"
+  echo "Priority: Quantum(10) -> WebSocket(20) -> TCP(30)."
+}
+
+configure_fusion_client() {
+  local input token profile target_input health_port instance label_hint ws_tls_bool
+  local quantum_endpoint tcp_endpoint
+  local targets=()
+
+  printf 'Paste the V2F1_ setup code from Iran: ' >&2
+  IFS= read -r input
+  parse_fusion_setup_code "$input" || { error "Invalid FusionMux setup code."; return 1; }
+  token="$FUSION_CODE_TOKEN"
+  profile="$FUSION_CODE_PROFILE"
+  apply_fusion_profile "$profile"
+  quantum_endpoint="$FUSION_CODE_HOST:$FUSION_CODE_QUANTUM_PORT"
+  tcp_endpoint="$FUSION_CODE_HOST:$FUSION_CODE_TCP_PORT"
+  label_hint="$FUSION_CODE_LABEL"
+  [[ "$FUSION_CODE_WS_TLS" == "1" ]] && ws_tls_bool=true || ws_tls_bool=false
+
+  if (( FUSION_CODE_COUNT == 1 )); then
+    target_input="$(prompt_default "Outside local target" "127.0.0.1:2444")"
+  else
+    target_input="$(prompt_default "Outside targets ($FUSION_CODE_COUNT items, comma-separated)" "$FUSION_CODE_PUBLIC_PORTS")"
+  fi
+  csv_targets "$target_input" targets || { error "Invalid target list."; return 1; }
+  (( ${#targets[@]} == FUSION_CODE_COUNT )) || {
+    error "Expected $FUSION_CODE_COUNT target(s), received ${#targets[@]}."
+    return 1
+  }
+
+  health_port="$(find_free_port tcp 19090)"
+  instance="$(new_instance outside "$label_hint")"
+  write_fusion_instance client "$instance" "$token" "$health_port" "$quantum_endpoint" \
+    "$FUSION_CODE_WS_ENDPOINT" "$FUSION_CODE_WS_HOST" "$ws_tls_bool" \
+    "$FUSION_CODE_WS_PATH" "$tcp_endpoint" targets || return 1
+  ok "FusionMux is active with hot paths, stream replay, reconnect and watchdog recovery."
+}
+
 configure_server() {
 	local mode profile token public_host carrier_port proto public_input public_port health_port raw_json="" setup_code instance label
   local public_ports=()
@@ -685,7 +995,7 @@ configure_server() {
 	fi
 	label="${instance#iran-}"
 
-	write_instance server "$instance" "$mode" "$token" "$health_port" "$carrier_port" "$raw_json" public_ports
+	write_instance server "$instance" "$mode" "$token" "$health_port" "$carrier_port" "$raw_json" public_ports || return 1
 	open_firewall_server "$mode" "$carrier_port" public_ports
 	if [[ "$mode" != "raw_icmp" ]]; then
 		setup_code="$(make_setup_code "$token" "$mode" "$public_host" "$carrier_port" \
@@ -744,7 +1054,7 @@ configure_client() {
 	(( ${#targets[@]} == count )) || { error "Expected $count target(s), received ${#targets[@]}."; return 1; }
 	health_port="$(find_free_port tcp 19090)"
 	instance="$(new_instance outside "$label_hint")"
-	write_instance client "$instance" "$mode" "$token" "$health_port" "$server_endpoint" "$raw_json" targets
+	write_instance client "$instance" "$mode" "$token" "$health_port" "$server_endpoint" "$raw_json" targets || return 1
 	ok "Automatic reconnect and the health watchdog are enabled."
 }
 
@@ -787,7 +1097,7 @@ configure_tun_server() {
   instance="$(new_instance iran "tun-${mode}-${carrier_port}")"
   label="${instance#iran-}"
   write_tun_instance server "$instance" "$mode" "$token" "$health_port" "$carrier_port" \
-    "$server_cidr" "$client_ip" "$mtu" routes
+    "$server_cidr" "$client_ip" "$mtu" routes || return 1
   open_firewall_carrier "$mode" "$carrier_port"
   setup_code="$(make_tun_setup_code "$token" "$mode" "$public_host" "$carrier_port" "$profile" \
     "$label" "$server_cidr" "$client_cidr" "$mtu")"
@@ -824,7 +1134,7 @@ configure_tun_client() {
   health_port="$(find_free_port tcp 19090)"
   instance="$(new_instance outside "$label_hint")"
   write_tun_instance client "$instance" "$mode" "$token" "$health_port" "$server_endpoint" \
-    "$client_cidr" "$server_ip" "$mtu" routes
+    "$client_cidr" "$server_ip" "$mtu" routes || return 1
   ok "TUN is active with reconnect and watchdog recovery."
   echo "Test the Iran side: ping -c 3 $server_ip"
 }
@@ -864,6 +1174,7 @@ list_instances() {
     carrier="$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)"
     kind="ports"
     grep -q '"tun"[[:space:]]*:' "$file" && kind="L3-TUN"
+    [[ "$carrier" == "fusion" ]] && kind="FusionMux"
     state="$("$SYSTEMCTL" is-active "v2quantum@$instance.service" 2>/dev/null || true)"
     index=$((index + 1))
     printf '%-4s %-34s %-8s %-12s %-9s %s\n' "$index" "$instance" "${role:-?}" "$kind" "${carrier:-?}" "${state:-unknown}"
@@ -926,6 +1237,43 @@ delete_instance() {
   ok "Instance $instance was completely removed. Other tunnels were not touched."
 }
 
+fusion_menu() {
+  local choice instance
+  while true; do
+    echo
+    echo "================ FusionMux Pro ================"
+    echo "Quantum UDP primary + WebSocket/WSS standby + TCP fallback"
+    echo "1) Create Iran FusionMux + generate V2F1 setup code"
+    echo "2) Create outside FusionMux from V2F1 setup code"
+    echo "3) List all V2Quantum instances"
+    echo "4) Status/health of one instance"
+    echo "5) Follow one tunnel log"
+    echo "6) Restart one tunnel"
+    echo "7) Delete one instance completely"
+    echo "0) Return"
+    choice="$(prompt_default "Choice" "1")"
+    case "${choice,,}" in
+      1|iran|server) configure_fusion_server || warn "FusionMux Iran setup was not completed." ;;
+      2|outside|client|kharej) configure_fusion_client || warn "FusionMux outside setup was not completed." ;;
+      3|list) list_instances ;;
+      4|status) show_status ;;
+      5|logs)
+        instance="$(pick_instance)" || continue
+        safe_instance "$instance" || { error "Invalid instance."; continue; }
+        "$JOURNALCTL" -fu "v2quantum@$instance.service"
+        ;;
+      6|restart)
+        instance="$(pick_instance)" || continue
+        safe_instance "$instance" || { error "Invalid instance."; continue; }
+        "$SYSTEMCTL" restart "v2quantum@$instance.service"
+        ;;
+      7|delete|remove) delete_instance ;;
+      0|back|q|quit|exit) return 0 ;;
+      *) error "Unknown choice." ;;
+    esac
+  done
+}
+
 tun_menu() {
   local choice instance
   while true; do
@@ -956,12 +1304,14 @@ V2Quantum Manager
 
 Usage:
   v2quantum-manager          Open the full manager
+  v2quantum-manager --fusion Open only the FusionMux Pro manager
   v2quantum-manager --tun    Open only the independent L3 TUN manager
   v2quantum-manager --list   List configured instances
 EOF
 }
 
 case "${1:-}" in
+  --fusion) fusion_menu; exit 0 ;;
   --tun) tun_menu; exit 0 ;;
   --list) list_instances; exit 0 ;;
   -h|--help) manager_usage; exit 0 ;;
@@ -972,9 +1322,11 @@ esac
 while true; do
   echo
   echo "================ V2Quantum Manager ================"
+  echo "Recommended"
+  echo "  F) FusionMux Pro - Quantum + WebSocket/WSS + TCP failover"
   echo "Reverse ports"
-  echo "  1) Iran server + V2Q3 setup code"
-  echo "  2) Outside server from V2Q3/V2Q2/V2Q1 code"
+  echo "  1) Iran single-carrier server + V2Q3 setup code"
+  echo "  2) Outside single-carrier server from V2Q setup code"
   echo "Layer 3"
   echo "  3) L3 TUN manager (independent TCP/Quantum carrier)"
   echo "Instances"
@@ -989,8 +1341,9 @@ while true; do
   echo " 11) Update core and manager"
   echo " 12) Uninstall V2Quantum program"
   echo "0) Exit"
-  choice="$(prompt_default "Choice" "1")"
+  choice="$(prompt_default "Choice" "F")"
   case "${choice,,}" in
+    f|fusion|fusionmux) fusion_menu ;;
     1|iran|server) configure_server || warn "Iran setup was not completed." ;;
     2|outside|client|kharej) configure_client || warn "Outside setup was not completed." ;;
     3|tun) tun_menu ;;

@@ -32,7 +32,7 @@ SOURCE_BINARY="${V2QUANTUM_BINARY:-}"
 if [[ -n "$SOURCE_BINARY" ]]; then
   [[ -f "$SOURCE_BINARY" ]] || { echo "Binary not found: $SOURCE_BINARY" >&2; exit 1; }
 elif command -v go >/dev/null 2>&1 && [[ -f "$PROJECT_DIR/go.mod" ]]; then
-  VERSION="${V2QUANTUM_VERSION:-0.3.0}"
+  VERSION="${V2QUANTUM_VERSION:-0.4.0}"
   echo "Building V2Quantum $VERSION from source..."
   (
     cd -- "$PROJECT_DIR"

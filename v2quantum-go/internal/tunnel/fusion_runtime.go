@@ -23,16 +23,16 @@ func (r *Runtime) runFusion(ctx context.Context) error {
 		}
 	}
 	fusionCfg := r.cfg.Carrier.Fusion
-	r.fusion = newFusionHub(
+	fusion := newFusionHub(
 		ctx, r.logger, r.stats, r.cfg.Role, targets,
 		r.cfg.Keepalive(), r.cfg.DialTimeout(),
 		time.Duration(fusionCfg.UnavailableTimeoutSecs)*time.Second,
 		time.Duration(fusionCfg.RecoveryHoldSeconds)*time.Second,
 		fusionCfg.ReplayBufferBytes,
 	)
+	r.fusion.Store(fusion)
 	defer func() {
-		r.fusion.closeAll()
-		r.fusion = nil
+		fusion.closeAll()
 	}()
 	if r.cfg.Role == "server" {
 		return r.runFusionServer(ctx)
@@ -87,7 +87,7 @@ func (r *Runtime) runFusionServer(ctx context.Context) error {
 		for _, item := range listeners {
 			_ = item.listener.Close()
 		}
-		r.fusion.closeAll()
+		r.fusion.Load().closeAll()
 	}()
 
 	select {
@@ -115,7 +115,7 @@ func (r *Runtime) runFusionClient(ctx context.Context) error {
 		}
 	}
 	<-ctx.Done()
-	r.fusion.closeAll()
+	r.fusion.Load().closeAll()
 	wg.Wait()
 	return nil
 }
@@ -192,7 +192,7 @@ func (r *Runtime) acceptFusionConn(ctx context.Context, path config.FusionPath, 
 		return
 	}
 	_ = secured.SetDeadline(time.Time{})
-	link := r.fusion.addLink(secured, path.Name, path.Mode, path.Priority)
+	link := r.fusion.Load().addLink(secured, path.Name, path.Mode, path.Priority)
 	if link == nil {
 		return
 	}
@@ -235,7 +235,7 @@ func (r *Runtime) fusionClientSlot(ctx context.Context, path config.FusionPath, 
 		}
 		_ = secured.SetDeadline(time.Time{})
 		backoff = r.cfg.ReconnectMin()
-		link := r.fusion.addLink(secured, path.Name, path.Mode, path.Priority)
+		link := r.fusion.Load().addLink(secured, path.Name, path.Mode, path.Priority)
 		if link == nil {
 			return
 		}
@@ -275,9 +275,10 @@ func (r *Runtime) serveFusionMapping(ctx context.Context, mapping config.Mapping
 }
 
 func (r *Runtime) openFusionUser(ctx context.Context, mapping string, conn net.Conn) {
-	id := r.fusion.nextFlowID()
-	flow := newFusionFlow(id, r.fusion, mapping, conn, true)
-	if !r.fusion.addFlow(flow) {
+	fusion := r.fusion.Load()
+	id := fusion.nextFlowID()
+	flow := newFusionFlow(id, fusion, mapping, conn, true)
+	if !fusion.addFlow(flow) {
 		_ = conn.Close()
 		r.stats.openFailed.Add(1)
 		return

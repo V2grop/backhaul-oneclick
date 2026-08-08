@@ -161,6 +161,62 @@ run_manager "$LEGACY_TUN_CLIENT_DIR" $'3\n2\n'"$LEGACY_TUN_CODE"$'\n\n\n0\n0\n'
 test -s "$LEGACY_TUN_CLIENT_DIR/$TUN_CLIENT_INSTANCE.json"
 grep -q '"profile": "balanced"' "$LEGACY_TUN_CLIENT_DIR/$TUN_CLIENT_INSTANCE.json"
 
+# FusionMux must create three hot paths and import one V2F1 code without
+# overwriting any other instance.
+FUSION_SERVER_DIR="$TMP_DIR/fusion-server"
+FUSION_SERVER_OUTPUT="$TMP_DIR/fusion-server-output.txt"
+run_manager "$FUSION_SERVER_DIR" $'f\n1\n\n25201,25202\n192.0.2.10\n8910\n8912\n1\n/v2q-test\n8911\nalpha-fusion\n0\n0\n' "$FUSION_SERVER_OUTPUT"
+FUSION_SERVER_INSTANCE="iran-alpha-fusion"
+test -s "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"mode": "fusion"' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"name": "quantum"' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"name": "websocket"' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"name": "tcp"' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"priority": 10' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"priority": 20' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+grep -q '"priority": 30' "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json"
+set -a
+# shellcheck disable=SC1090
+source "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.env"
+set +a
+"$BIN" check -config "$FUSION_SERVER_DIR/$FUSION_SERVER_INSTANCE.json" >/dev/null
+FUSION_CODE="$(grep '^V2F1_' "$FUSION_SERVER_OUTPUT")"
+test -n "$FUSION_CODE"
+
+FUSION_CLIENT_DIR="$TMP_DIR/fusion-client"
+run_manager "$FUSION_CLIENT_DIR" $'f\n2\n'"$FUSION_CODE"$'\n127.0.0.1:26201,127.0.0.1:26202\n\n0\n0\n'
+FUSION_CLIENT_INSTANCE="outside-alpha-fusion"
+test -s "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json"
+grep -q '"server": "192.0.2.10:8910"' "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json"
+grep -q '"server": "192.0.2.10:8911"' "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json"
+grep -q '"tls": false' "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json"
+grep -q '"target": "127.0.0.1:26202"' "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json"
+set -a
+# shellcheck disable=SC1090
+source "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.env"
+set +a
+"$BIN" check -config "$FUSION_CLIENT_DIR/$FUSION_CLIENT_INSTANCE.json" >/dev/null
+
+# Cloudflare mode must keep the edge endpoint separate from the plain origin
+# listener and must enable verified TLS/SNI on the outside client.
+FUSION_CF_SERVER_DIR="$TMP_DIR/fusion-cf-server"
+FUSION_CF_OUTPUT="$TMP_DIR/fusion-cf-output.txt"
+run_manager "$FUSION_CF_SERVER_DIR" $'f\n1\n\n25203\n192.0.2.10\n8920\n8922\n2\n/cdn-path\nedge.example.com\n\n8080\ncf-fusion\n0\n0\n' "$FUSION_CF_OUTPUT"
+grep -q '"listen": "0.0.0.0:8080"' "$FUSION_CF_SERVER_DIR/iran-cf-fusion.json"
+FUSION_CF_CODE="$(grep '^V2F1_' "$FUSION_CF_OUTPUT")"
+test -n "$FUSION_CF_CODE"
+FUSION_CF_CLIENT_DIR="$TMP_DIR/fusion-cf-client"
+run_manager "$FUSION_CF_CLIENT_DIR" $'f\n2\n'"$FUSION_CF_CODE"$'\n127.0.0.1:26203\n\n0\n0\n'
+grep -q '"server": "edge.example.com:443"' "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.json"
+grep -q '"host": "edge.example.com"' "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.json"
+grep -q '"server_name": "edge.example.com"' "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.json"
+grep -q '"tls": true' "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.json"
+set -a
+# shellcheck disable=SC1090
+source "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.env"
+set +a
+"$BIN" check -config "$FUSION_CF_CLIENT_DIR/outside-cf-fusion.json" >/dev/null
+
 # A failed first start must not leave an enabled, half-configured instance.
 FAIL_SYSTEMCTL="$TMP_DIR/systemctl-fail"
 FAIL_LOG="$TMP_DIR/systemctl-fail.log"

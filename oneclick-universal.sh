@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -53,6 +53,7 @@ Usage:
   tunnel-manager --backhaul          Backhaul: TCP/MUX/WS/TLS/TUN
   tunnel-manager --xwsmux-max        Optimized XWSMUX/Cloudflare profile
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
+  tunnel-manager --fusion            FusionMux: Quantum + WebSocket + TCP failover
   tunnel-manager --tun               Independent encrypted layer-3 TUN manager
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
@@ -91,7 +92,13 @@ capabilities() {
    over TCP or Quantum UDP with V2T1 setup codes and per-tunnel devices.
    quantum_udp is the carrier; user mappings are currently TCP.
 
-4) Realm Tunnel Manager (external open-source project)
+4) FusionMux Pro (inside V2Quantum)
+   Three authenticated hot paths in priority order: Quantum UDP,
+   WebSocket/WSS, then direct TCP. Logical stream offsets, cumulative
+   acknowledgements, deduplication and bounded replay allow an existing
+   TCP connection to resume on a healthy path instead of being recreated.
+
+5) Realm Tunnel Manager (external open-source project)
    Optional direct layer-4 TCP/UDP port forwarding.
 
 Pengu and Dagger licensed binaries are not bundled or required by this
@@ -216,6 +223,9 @@ run_v2quantum() {
   if [[ "$manager_mode" == "tun" ]]; then
     printf '%sV2TUN independent layer-3 manager%s\n' "$cyan" "$reset"
     echo "Encrypted point-to-point TUN over TCP or Quantum UDP."
+  elif [[ "$manager_mode" == "fusion" ]]; then
+    printf '%sFusionMux Pro manager%s\n' "$cyan" "$reset"
+    echo "Quantum UDP primary + WebSocket/WSS standby + TCP fallback."
   else
     printf '%sV2Quantum independent manager%s\n' "$cyan" "$reset"
     echo "Modes: TCP, Quantum UDP carrier, and experimental Raw ICMP spoof/BIP."
@@ -225,6 +235,8 @@ run_v2quantum() {
   if [[ -x "$V2QUANTUM_MANAGER_COMMAND" ]]; then
     if [[ "$manager_mode" == "tun" ]]; then
       "$V2QUANTUM_MANAGER_COMMAND" --tun
+    elif [[ "$manager_mode" == "fusion" ]]; then
+      "$V2QUANTUM_MANAGER_COMMAND" --fusion
     else
       "$V2QUANTUM_MANAGER_COMMAND"
     fi
@@ -248,6 +260,10 @@ run_v2quantum() {
 
 run_v2tun() {
   run_v2quantum tun
+}
+
+run_fusion() {
+  run_v2quantum fusion
 }
 
 run_realm() {
@@ -333,7 +349,7 @@ menu() {
     echo "        Universal Tunnel Manager v$SCRIPT_VERSION"
     echo "===================================================="
     echo "1) Backhaul family - Standard / XWSMUX Max / TUN"
-    echo "2) V2Quantum - TCP / Quantum / Raw spoof-BIP"
+    echo "2) V2Quantum - FusionMux / Quantum / TCP / Raw spoof-BIP"
     echo "3) Realm - TCP/UDP port forwarding"
     echo "4) Unified status and diagnostics"
     echo "5) Install/update tunnel-manager shortcut"
@@ -361,6 +377,7 @@ while (( $# > 0 )); do
     --backhaul) ACTION="backhaul" ;;
     --xwsmux-max) ACTION="xwsmux-max" ;;
     --v2quantum) ACTION="v2quantum" ;;
+    --fusion) ACTION="fusion" ;;
     --tun) ACTION="tun" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
@@ -382,6 +399,7 @@ case "$ACTION" in
   backhaul) run_backhaul ;;
   xwsmux-max) run_xwsmux_max ;;
   v2quantum) run_v2quantum ;;
+  fusion) run_fusion ;;
   tun) run_v2tun ;;
   realm) run_realm ;;
   status) show_status ;;
