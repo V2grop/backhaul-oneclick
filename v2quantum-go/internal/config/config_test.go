@@ -172,3 +172,62 @@ func TestRejectUnsafeTUNCombinations(t *testing.T) {
 		})
 	}
 }
+
+func TestFusionDefaultsPreferQuantumAndValidateBothRoles(t *testing.T) {
+	server := validServer()
+	server.Carrier.Mode = "fusion"
+	server.Carrier.Listen = ""
+	server.Carrier.Fusion.Paths = []FusionPath{
+		{Name: "quantum", Mode: "quantum_udp", Listen: "127.0.0.1:8880"},
+		{Name: "cloud", Mode: "websocket", Listen: "127.0.0.1:8080", WebSocket: WebSocket{Path: "fusion"}},
+		{Name: "direct", Mode: "tcp", Listen: "127.0.0.1:8443"},
+	}
+	server.applyDefaults()
+	if got := server.Carrier.Fusion.Paths[0].Priority; got != 10 {
+		t.Fatalf("quantum priority = %d, want 10", got)
+	}
+	if got := server.Carrier.Fusion.Paths[1].Priority; got != 20 {
+		t.Fatalf("websocket priority = %d, want 20", got)
+	}
+	if got := server.Carrier.Fusion.Paths[2].Priority; got != 30 {
+		t.Fatalf("tcp priority = %d, want 30", got)
+	}
+	if server.Carrier.Fusion.Paths[1].WebSocket.Path != "/fusion" {
+		t.Fatalf("path was not normalized: %q", server.Carrier.Fusion.Paths[1].WebSocket.Path)
+	}
+	if server.Carrier.Fusion.ReplayBufferBytes != 4<<20 {
+		t.Fatalf("unexpected replay window: %d", server.Carrier.Fusion.ReplayBufferBytes)
+	}
+	if err := server.Validate(); err != nil {
+		t.Fatalf("valid fusion server rejected: %v", err)
+	}
+
+	client := server
+	client.Role = "client"
+	client.NodeName = "outside"
+	client.Mappings = []Mapping{{Name: "xray", Protocol: "tcp", Target: "127.0.0.1:2444"}}
+	for i := range client.Carrier.Fusion.Paths {
+		client.Carrier.Fusion.Paths[i].Server = client.Carrier.Fusion.Paths[i].Listen
+		client.Carrier.Fusion.Paths[i].Listen = ""
+	}
+	client.Carrier.Fusion.Paths[1].WebSocket.TLS = true
+	client.Carrier.Fusion.Paths[1].WebSocket.Host = "edge.example.com"
+	if err := client.Validate(); err != nil {
+		t.Fatalf("valid fusion client rejected: %v", err)
+	}
+}
+
+func TestRejectInvalidFusionConfiguration(t *testing.T) {
+	c := validServer()
+	c.Carrier.Mode = "fusion"
+	c.Carrier.Listen = ""
+	c.Carrier.Fusion.Paths = []FusionPath{
+		{Name: "same", Mode: "tcp", Listen: "127.0.0.1:9000"},
+		{Name: "same", Mode: "websocket", Listen: "127.0.0.1:9000"},
+	}
+	c.applyDefaults()
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "duplicate fusion path name") || !strings.Contains(err.Error(), "same tcp:") {
+		t.Fatalf("invalid fusion config accepted: %v", err)
+	}
+}

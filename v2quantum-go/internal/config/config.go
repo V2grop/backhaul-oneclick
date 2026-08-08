@@ -36,6 +36,7 @@ type Carrier struct {
 	MaxStreamsPerSession int         `json:"max_streams_per_session"`
 	Quantum              Quantum     `json:"quantum,omitempty"`
 	Raw                  RawSettings `json:"raw,omitempty"`
+	Fusion               Fusion      `json:"fusion,omitempty"`
 }
 
 // Quantum contains the independent Quantum v2 UDP reliability controls. The
@@ -55,6 +56,38 @@ type Quantum struct {
 	FECParityShards   int    `json:"fec_parity_shards,omitempty"`
 	SocketBufferBytes int    `json:"socket_buffer_bytes,omitempty"`
 	MaxRetries        int    `json:"max_retries,omitempty"`
+}
+
+// Fusion keeps several independent underlays connected to one logical tunnel.
+// Streams live above the paths, so an in-flight connection can replay only its
+// unacknowledged bytes after the selected path fails.
+type Fusion struct {
+	Policy                 string       `json:"policy,omitempty"`
+	UnavailableTimeoutSecs int          `json:"unavailable_timeout_seconds,omitempty"`
+	RecoveryHoldSeconds    int          `json:"recovery_hold_seconds,omitempty"`
+	ReplayBufferBytes      int          `json:"replay_buffer_bytes,omitempty"`
+	Paths                  []FusionPath `json:"paths,omitempty"`
+}
+
+type FusionPath struct {
+	Name      string    `json:"name"`
+	Mode      string    `json:"mode"`
+	Listen    string    `json:"listen,omitempty"`
+	Server    string    `json:"server,omitempty"`
+	Priority  int       `json:"priority,omitempty"`
+	Pool      int       `json:"pool,omitempty"`
+	Quantum   Quantum   `json:"quantum,omitempty"`
+	WebSocket WebSocket `json:"websocket,omitempty"`
+}
+
+type WebSocket struct {
+	Path               string `json:"path,omitempty"`
+	Host               string `json:"host,omitempty"`
+	TLS                bool   `json:"tls,omitempty"`
+	ServerName         string `json:"server_name,omitempty"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify,omitempty"`
+	TLSCertFile        string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile         string `json:"tls_key_file,omitempty"`
 }
 
 type RawSettings struct {
@@ -157,6 +190,9 @@ func (c *Config) applyDefaults() {
 	if c.Carrier.Mode == "quantum_udp" {
 		c.Carrier.Quantum.applyDefaults()
 	}
+	if c.Carrier.Mode == "fusion" {
+		c.Carrier.Fusion.applyDefaults()
+	}
 	if c.Carrier.Raw.PayloadMTU == 0 {
 		c.Carrier.Raw.PayloadMTU = 1200
 	}
@@ -191,13 +227,13 @@ func (c *Config) Validate() error {
 	if c.NodeName == "" || len(c.NodeName) > 64 {
 		errs = append(errs, errors.New("node_name must contain 1-64 characters"))
 	}
-	if c.Carrier.Mode != "tcp" && c.Carrier.Mode != "quantum_udp" && c.Carrier.Mode != "raw_icmp" {
-		errs = append(errs, errors.New("carrier.mode must be tcp, quantum_udp, or raw_icmp"))
+	if c.Carrier.Mode != "tcp" && c.Carrier.Mode != "quantum_udp" && c.Carrier.Mode != "raw_icmp" && c.Carrier.Mode != "fusion" {
+		errs = append(errs, errors.New("carrier.mode must be tcp, quantum_udp, raw_icmp, or fusion"))
 	}
-	if c.Role == "server" && c.Carrier.Mode != "raw_icmp" {
+	if c.Role == "server" && c.Carrier.Mode != "raw_icmp" && c.Carrier.Mode != "fusion" {
 		errs = append(errs, validateEndpoint("carrier.listen", c.Carrier.Listen))
 	}
-	if c.Role == "client" && c.Carrier.Mode != "raw_icmp" {
+	if c.Role == "client" && c.Carrier.Mode != "raw_icmp" && c.Carrier.Mode != "fusion" {
 		errs = append(errs, validateEndpoint("carrier.server", c.Carrier.Server))
 	}
 	if c.Carrier.Pool < 1 || c.Carrier.Pool > 32 {
@@ -223,6 +259,11 @@ func (c *Config) Validate() error {
 			errs = append(errs, err)
 		}
 	}
+	if c.Carrier.Mode == "fusion" {
+		if err := validateFusion(c.Role, c.Carrier.Fusion); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if len(c.Security.PSK) < 32 || len(c.Security.PSK) > 512 {
 		errs = append(errs, fmt.Errorf("security PSK must be 32-512 characters (or set %s)", c.Security.PSKEnv))
 	}
@@ -236,6 +277,9 @@ func (c *Config) Validate() error {
 	if tunEnabled {
 		if c.Carrier.Mode == "raw_icmp" {
 			errs = append(errs, errors.New("tun mode supports tcp or quantum_udp carriers; raw_icmp remains a separate experimental mode"))
+		}
+		if c.Carrier.Mode == "fusion" {
+			errs = append(errs, errors.New("tun mode currently uses a separate tcp or quantum_udp instance; FusionMux packet failover is not enabled yet"))
 		}
 		if c.Carrier.Pool != 1 {
 			errs = append(errs, errors.New("tun mode requires carrier.pool=1 to preserve packet order"))
@@ -457,6 +501,141 @@ func validateQuantum(q Quantum) error {
 		errs = append(errs, errors.New("carrier.quantum.max_retries must be 1-64"))
 	}
 	return errors.Join(nonNil(errs)...)
+}
+
+func (f *Fusion) applyDefaults() {
+	f.Policy = strings.ToLower(strings.TrimSpace(f.Policy))
+	if f.Policy == "" {
+		f.Policy = "failover"
+	}
+	if f.UnavailableTimeoutSecs == 0 {
+		f.UnavailableTimeoutSecs = 30
+	}
+	if f.RecoveryHoldSeconds == 0 {
+		f.RecoveryHoldSeconds = 15
+	}
+	if f.ReplayBufferBytes == 0 {
+		f.ReplayBufferBytes = 4 << 20
+	}
+	for i := range f.Paths {
+		path := &f.Paths[i]
+		path.Name = strings.TrimSpace(path.Name)
+		path.Mode = strings.ToLower(strings.TrimSpace(path.Mode))
+		if path.Priority == 0 {
+			switch path.Mode {
+			case "quantum_udp":
+				path.Priority = 10
+			case "websocket":
+				path.Priority = 20
+			default:
+				path.Priority = 30
+			}
+		}
+		if path.Pool == 0 {
+			path.Pool = 1
+		}
+		if path.Mode == "quantum_udp" {
+			path.Quantum.applyDefaults()
+		}
+		if path.Mode == "websocket" {
+			path.WebSocket.Path = strings.TrimSpace(path.WebSocket.Path)
+			if path.WebSocket.Path == "" {
+				path.WebSocket.Path = "/v2q-fusion"
+			}
+			if !strings.HasPrefix(path.WebSocket.Path, "/") {
+				path.WebSocket.Path = "/" + path.WebSocket.Path
+			}
+		}
+	}
+}
+
+func validateFusion(role string, f Fusion) error {
+	var errs []error
+	if f.Policy != "failover" {
+		errs = append(errs, errors.New("carrier.fusion.policy currently supports failover"))
+	}
+	if f.UnavailableTimeoutSecs < 5 || f.UnavailableTimeoutSecs > 600 {
+		errs = append(errs, errors.New("carrier.fusion.unavailable_timeout_seconds must be 5-600"))
+	}
+	if f.RecoveryHoldSeconds < 0 || f.RecoveryHoldSeconds > 300 {
+		errs = append(errs, errors.New("carrier.fusion.recovery_hold_seconds must be 0-300"))
+	}
+	if f.ReplayBufferBytes < 256<<10 || f.ReplayBufferBytes > 64<<20 {
+		errs = append(errs, errors.New("carrier.fusion.replay_buffer_bytes must be 262144-67108864"))
+	}
+	if len(f.Paths) < 2 || len(f.Paths) > 8 {
+		errs = append(errs, errors.New("carrier.fusion.paths must contain 2-8 paths"))
+	}
+	seenNames := make(map[string]struct{}, len(f.Paths))
+	seenBind := make(map[string]string, len(f.Paths))
+	for i, path := range f.Paths {
+		prefix := fmt.Sprintf("carrier.fusion.paths[%d]", i)
+		if !validInstanceName(path.Name, 32) {
+			errs = append(errs, fmt.Errorf("%s.name must contain 1-32 letters, numbers, dashes, or underscores", prefix))
+		} else if _, exists := seenNames[path.Name]; exists {
+			errs = append(errs, fmt.Errorf("duplicate fusion path name %q", path.Name))
+		} else {
+			seenNames[path.Name] = struct{}{}
+		}
+		if path.Mode != "tcp" && path.Mode != "quantum_udp" && path.Mode != "websocket" {
+			errs = append(errs, fmt.Errorf("%s.mode must be tcp, quantum_udp, or websocket", prefix))
+		}
+		if role == "server" {
+			if err := validateEndpoint(prefix+".listen", path.Listen); err != nil {
+				errs = append(errs, err)
+			} else {
+				networkName := "tcp"
+				if path.Mode == "quantum_udp" {
+					networkName = "udp"
+				}
+				key := networkName + ":" + path.Listen
+				if previous, exists := seenBind[key]; exists {
+					errs = append(errs, fmt.Errorf("fusion paths %q and %q use the same %s listener", previous, path.Name, key))
+				} else {
+					seenBind[key] = path.Name
+				}
+			}
+		} else {
+			errs = append(errs, validateEndpoint(prefix+".server", path.Server))
+		}
+		if path.Priority < 1 || path.Priority > 1000 {
+			errs = append(errs, fmt.Errorf("%s.priority must be 1-1000", prefix))
+		}
+		if path.Pool < 1 || path.Pool > 8 {
+			errs = append(errs, fmt.Errorf("%s.pool must be 1-8", prefix))
+		}
+		if path.Mode == "quantum_udp" {
+			if err := validateQuantum(path.Quantum); err != nil {
+				errs = append(errs, fmt.Errorf("%s.quantum: %w", prefix, err))
+			}
+		}
+		if path.Mode == "websocket" {
+			ws := path.WebSocket
+			if !strings.HasPrefix(ws.Path, "/") || strings.ContainsAny(ws.Path, "\r\n?#") {
+				errs = append(errs, fmt.Errorf("%s.websocket.path must be an absolute path without query or fragment", prefix))
+			}
+			if strings.ContainsAny(ws.Host+ws.ServerName, "\r\n") {
+				errs = append(errs, fmt.Errorf("%s.websocket host fields may not contain newlines", prefix))
+			}
+			if (ws.TLSCertFile == "") != (ws.TLSKeyFile == "") {
+				errs = append(errs, fmt.Errorf("%s.websocket TLS certificate and key must be set together", prefix))
+			}
+		}
+	}
+	return errors.Join(nonNil(errs)...)
+}
+
+func validInstanceName(value string, maxLen int) bool {
+	if len(value) < 1 || len(value) > maxLen {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateTUN(t TUN) error {

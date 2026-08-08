@@ -27,6 +27,7 @@ type Runtime struct {
 	openTUN tun.OpenFunc
 	tunDev  tun.Device
 	tunIn   chan []byte
+	fusion  *fusionHub
 }
 
 func NewRuntime(cfg *config.Config, logger *slog.Logger) *Runtime {
@@ -39,10 +40,16 @@ func NewRuntime(cfg *config.Config, logger *slog.Logger) *Runtime {
 func (r *Runtime) Snapshot() Snapshot { return r.stats.Snapshot() }
 
 func (r *Runtime) Ready() bool {
+	if r.fusion != nil {
+		return r.fusion.ready()
+	}
 	return r.pool.count() > 0
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	if r.cfg.Carrier.Mode == "fusion" {
+		return r.runFusion(ctx)
+	}
 	if r.cfg.TUN != nil && r.cfg.TUN.Enabled {
 		return r.runTUN(ctx)
 	}

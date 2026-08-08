@@ -17,6 +17,14 @@ const (
 	Ping
 	Pong
 	Packet
+	FusionHello
+	FusionHelloOK
+	FusionOpen
+	FusionOpenOK
+	FusionOpenError
+	FusionData
+	FusionAck
+	FusionClose
 )
 
 const (
@@ -32,20 +40,36 @@ type Frame struct {
 }
 
 func (f Frame) Validate() error {
-	if f.Type < Open || f.Type > Packet {
+	if f.Type < Open || f.Type > FusionClose {
 		return fmt.Errorf("invalid frame type %d", f.Type)
 	}
 	if len(f.Payload) > MaxPayload {
 		return fmt.Errorf("payload exceeds %d bytes", MaxPayload)
 	}
-	if f.StreamID == 0 && f.Type != Ping && f.Type != Pong && f.Type != Packet {
+	control := f.Type == Ping || f.Type == Pong || f.Type == Packet || f.Type == FusionHello || f.Type == FusionHelloOK
+	if f.StreamID == 0 && !control {
 		return errors.New("stream id zero is reserved for session control")
 	}
-	if f.StreamID != 0 && (f.Type == Ping || f.Type == Pong || f.Type == Packet) {
-		return errors.New("ping/pong/packet must use stream id zero")
+	if f.StreamID != 0 && control {
+		return errors.New("session control frames must use stream id zero")
 	}
 	if f.Type == Packet && len(f.Payload) == 0 {
 		return errors.New("packet payload must not be empty")
+	}
+	if f.Type == FusionHello && (len(f.Payload) < 1 || len(f.Payload) > 32) {
+		return errors.New("fusion hello path must contain 1-32 bytes")
+	}
+	if f.Type == FusionHelloOK && len(f.Payload) != 0 {
+		return errors.New("fusion hello acknowledgement must be empty")
+	}
+	if f.Type == FusionOpen && (len(f.Payload) < 1 || len(f.Payload) > 64) {
+		return errors.New("fusion mapping must contain 1-64 bytes")
+	}
+	if f.Type == FusionData && len(f.Payload) < 9 {
+		return errors.New("fusion data must contain an offset and payload")
+	}
+	if (f.Type == FusionAck || f.Type == FusionClose) && len(f.Payload) != 8 {
+		return errors.New("fusion acknowledgement/close payload must be 8 bytes")
 	}
 	return nil
 }
