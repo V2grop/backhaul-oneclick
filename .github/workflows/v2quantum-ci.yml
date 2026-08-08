@@ -6,6 +6,10 @@ on:
       - "v2quantum-go/**"
       - "v2quantum-oneclick.sh"
       - "oneclick-universal.sh"
+      - "oneclick-v3-en.sh"
+      - "oneclick-xwsmux-max.sh"
+      - "tests/test-xwsmux-max.sh"
+      - "tests/test-backhaul-wrapper.sh"
       - ".github/workflows/v2quantum-*.yml"
   push:
     branches:
@@ -14,6 +18,10 @@ on:
       - "v2quantum-go/**"
       - "v2quantum-oneclick.sh"
       - "oneclick-universal.sh"
+      - "oneclick-v3-en.sh"
+      - "oneclick-xwsmux-max.sh"
+      - "tests/test-xwsmux-max.sh"
+      - "tests/test-backhaul-wrapper.sh"
       - ".github/workflows/v2quantum-*.yml"
 
 permissions:
@@ -43,6 +51,6 @@ jobs:
 
       - name: Verify release payload
         run: |
-          make release VERSION=0.1.0
+          make release VERSION=0.3.0
           cd dist
           sha256sum -c SHA256SUMS

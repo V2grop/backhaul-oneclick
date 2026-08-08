@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-INSTALLER_VERSION="0.1.0"
+INSTALLER_VERSION="0.3.0"
 OVERRIDE_REPO="${V2QUANTUM_REPO:-}"
 OVERRIDE_REF="${V2QUANTUM_REF:-}"
 OVERRIDE_VERSION="${V2QUANTUM_VERSION:-}"
@@ -15,7 +15,7 @@ fi
 [[ -n "$OVERRIDE_VERSION" ]] && V2QUANTUM_VERSION="$OVERRIDE_VERSION"
 REPO="${V2QUANTUM_REPO:-V2grop/backhaul-oneclick}"
 REF="${V2QUANTUM_REF:-main}"
-CORE_VERSION="${V2QUANTUM_VERSION:-0.1.0}"
+CORE_VERSION="${V2QUANTUM_VERSION:-0.3.0}"
 GO_VERSION="1.26.5"
 ACTION="install"
 OPEN_MENU=true
@@ -130,20 +130,20 @@ fi
 
 install_dependencies() {
   local missing=false
-  for command_name in curl tar sha256sum install awk sed grep mktemp systemctl; do
+  for command_name in curl tar sha256sum install awk sed grep mktemp systemctl ip; do
     command -v "$command_name" >/dev/null 2>&1 || missing=true
   done
   [[ "$missing" == false ]] && return 0
 
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates tar coreutils
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates tar coreutils iproute2
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y curl ca-certificates tar coreutils
+    dnf install -y curl ca-certificates tar coreutils iproute
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y curl ca-certificates tar coreutils
+    yum install -y curl ca-certificates tar coreutils iproute
   else
-    die "Install curl, ca-certificates, tar, coreutils and systemd first."
+    die "Install curl, ca-certificates, tar, coreutils, iproute2 and systemd first."
   fi
 }
 
@@ -202,6 +202,13 @@ release_install() {
   done
   [[ "$(wc -l <"$selected")" -eq "${#assets[@]}" ]] || return 1
   (cd -- "$payload" && sha256sum -c SHA256SUMS.selected) || return 1
+  chmod 755 "$payload/v2quantum-linux-$ARCH"
+  local release_version
+  release_version="$("$payload/v2quantum-linux-$ARCH" version 2>/dev/null || true)"
+  if [[ "$release_version" != "v2quantum-go $CORE_VERSION" ]]; then
+    warn "Latest release is ${release_version:-unusable}; this manager requires v2quantum-go $CORE_VERSION."
+    return 1
+  fi
 
   local backup="/var/lib/v2quantum/backups/release-$(date +%Y%m%d-%H%M%S)"
   local backup_created=false target
@@ -316,5 +323,8 @@ done < <(systemctl list-units --type=service --state=active 'v2quantum@*.service
 ok "V2Quantum installed from $INSTALLED_FROM"
 /usr/local/bin/v2quantum version
 if [[ "$OPEN_MENU" == true ]]; then
+  if [[ "${V2QUANTUM_MANAGER_MODE:-}" == "tun" ]]; then
+    exec /usr/local/sbin/v2quantum-manager --tun
+  fi
   exec /usr/local/sbin/v2quantum-manager
 fi

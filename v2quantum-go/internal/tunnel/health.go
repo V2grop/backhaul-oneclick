@@ -27,8 +27,11 @@ func (r *Runtime) ServeHealth(ctx context.Context) error {
 		s := r.Snapshot()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = fmt.Fprintf(w,
-			"v2quantum_sessions %d\nv2quantum_streams %d\nv2quantum_bytes_to_exit_total %d\nv2quantum_bytes_to_user_total %d\nv2quantum_reconnects_total %d\nv2quantum_auth_failures_total %d\nv2quantum_open_failures_total %d\n",
-			s.Sessions, s.Streams, s.BytesToExit, s.BytesToUser, s.Reconnects, s.AuthFailed, s.OpenFailed)
+			"v2quantum_sessions %d\nv2quantum_streams %d\nv2quantum_bytes_to_exit_total %d\nv2quantum_bytes_to_user_total %d\nv2quantum_reconnects_total %d\nv2quantum_auth_failures_total %d\nv2quantum_open_failures_total %d\nv2quantum_tun_packets_to_peer_total %d\nv2quantum_tun_packets_from_peer_total %d\nv2quantum_tun_bytes_to_peer_total %d\nv2quantum_tun_bytes_from_peer_total %d\nv2quantum_udp_retransmits_total %d\nv2quantum_udp_fast_resends_total %d\nv2quantum_udp_fec_sent_total %d\nv2quantum_udp_fec_recovered_total %d\nv2quantum_udp_srtt_milliseconds %d\nv2quantum_udp_rto_milliseconds %d\nv2quantum_udp_congestion_window %d\n",
+			s.Sessions, s.Streams, s.BytesToExit, s.BytesToUser, s.Reconnects, s.AuthFailed, s.OpenFailed,
+			s.TUNPacketsToPeer, s.TUNPacketsFromPeer, s.TUNBytesToPeer, s.TUNBytesFromPeer,
+			s.QuantumRetransmits, s.QuantumFastResends, s.QuantumFECSent, s.QuantumFECRecovered,
+			s.QuantumSRTTMillis, s.QuantumRTOMillis, s.QuantumWindow)
 	})
 	server := &http.Server{
 		Addr:              r.cfg.Health.Listen,

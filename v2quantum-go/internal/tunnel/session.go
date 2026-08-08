@@ -16,14 +16,15 @@ import (
 )
 
 type session struct {
-	conn       *secure.Conn
-	logger     *slog.Logger
-	stats      *Stats
-	targets    map[string]string
-	allowOpen  bool
-	maxStreams int
-	keepalive  time.Duration
-	dial       time.Duration
+	conn          *secure.Conn
+	logger        *slog.Logger
+	stats         *Stats
+	targets       map[string]string
+	allowOpen     bool
+	packetHandler func([]byte) error
+	maxStreams    int
+	keepalive     time.Duration
+	dial          time.Duration
 
 	streamsMu sync.RWMutex
 	streams   map[uint32]*stream
@@ -44,18 +45,19 @@ type stream struct {
 	once    sync.Once
 }
 
-func newSession(conn *secure.Conn, logger *slog.Logger, stats *Stats, targets map[string]string, allowOpen bool, maxStreams int, keepalive, dial time.Duration) *session {
+func newSession(conn *secure.Conn, logger *slog.Logger, stats *Stats, targets map[string]string, allowOpen bool, packetHandler func([]byte) error, maxStreams int, keepalive, dial time.Duration) *session {
 	s := &session{
-		conn:       conn,
-		logger:     logger,
-		stats:      stats,
-		targets:    targets,
-		allowOpen:  allowOpen,
-		maxStreams: maxStreams,
-		keepalive:  keepalive,
-		dial:       dial,
-		streams:    make(map[uint32]*stream),
-		closed:     make(chan struct{}),
+		conn:          conn,
+		logger:        logger,
+		stats:         stats,
+		targets:       targets,
+		allowOpen:     allowOpen,
+		packetHandler: packetHandler,
+		maxStreams:    maxStreams,
+		keepalive:     keepalive,
+		dial:          dial,
+		streams:       make(map[uint32]*stream),
+		closed:        make(chan struct{}),
 	}
 	s.nextID.Store(1)
 	s.lastPong.Store(time.Now().UnixNano())
@@ -63,6 +65,13 @@ func newSession(conn *secure.Conn, logger *slog.Logger, stats *Stats, targets ma
 	go s.readLoop()
 	go s.keepaliveLoop()
 	return s
+}
+
+func (s *session) sendPacket(packet []byte) error {
+	if s.isClosed() {
+		return net.ErrClosed
+	}
+	return s.conn.WriteFrame(protocol.Frame{Type: protocol.Packet, Payload: packet})
 }
 
 func (s *session) wait() { <-s.closed }
@@ -207,6 +216,15 @@ func (s *session) readLoop() {
 			}
 		case protocol.Pong:
 			s.lastPong.Store(time.Now().UnixNano())
+		case protocol.Packet:
+			if s.packetHandler == nil {
+				s.close(errors.New("peer sent a tun packet to a non-tun session"))
+				return
+			}
+			if err := s.packetHandler(frame.Payload); err != nil {
+				s.close(err)
+				return
+			}
 		}
 	}
 }

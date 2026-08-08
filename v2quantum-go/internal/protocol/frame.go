@@ -16,6 +16,7 @@ const (
 	Close
 	Ping
 	Pong
+	Packet
 )
 
 const (
@@ -31,17 +32,20 @@ type Frame struct {
 }
 
 func (f Frame) Validate() error {
-	if f.Type < Open || f.Type > Pong {
+	if f.Type < Open || f.Type > Packet {
 		return fmt.Errorf("invalid frame type %d", f.Type)
 	}
 	if len(f.Payload) > MaxPayload {
 		return fmt.Errorf("payload exceeds %d bytes", MaxPayload)
 	}
-	if f.StreamID == 0 && f.Type != Ping && f.Type != Pong {
+	if f.StreamID == 0 && f.Type != Ping && f.Type != Pong && f.Type != Packet {
 		return errors.New("stream id zero is reserved for session control")
 	}
-	if f.StreamID != 0 && (f.Type == Ping || f.Type == Pong) {
-		return errors.New("ping/pong must use stream id zero")
+	if f.StreamID != 0 && (f.Type == Ping || f.Type == Pong || f.Type == Packet) {
+		return errors.New("ping/pong/packet must use stream id zero")
+	}
+	if f.Type == Packet && len(f.Payload) == 0 {
+		return errors.New("packet payload must not be empty")
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ type Config struct {
 	Carrier  Carrier   `json:"carrier"`
 	Security Security  `json:"security"`
 	Mappings []Mapping `json:"mappings"`
+	TUN      *TUN      `json:"tun,omitempty"`
 	Health   Health    `json:"health"`
 	Logging  Logging   `json:"logging"`
 }
@@ -33,7 +34,27 @@ type Carrier struct {
 	ReconnectMinMillis   int         `json:"reconnect_min_millis"`
 	ReconnectMaxMillis   int         `json:"reconnect_max_millis"`
 	MaxStreamsPerSession int         `json:"max_streams_per_session"`
+	Quantum              Quantum     `json:"quantum,omitempty"`
 	Raw                  RawSettings `json:"raw,omitempty"`
+}
+
+// Quantum contains the independent Quantum v2 UDP reliability controls. The
+// normal one-click path writes only profile and auto_tune; the remaining fields
+// exist for measurable, explicit manual tuning.
+type Quantum struct {
+	Profile           string `json:"profile,omitempty"`
+	AutoTune          *bool  `json:"auto_tune,omitempty"`
+	MaxDatagramSize   int    `json:"max_datagram_size,omitempty"`
+	SendWindow        int    `json:"send_window,omitempty"`
+	ReceiveWindow     int    `json:"receive_window,omitempty"`
+	InitialRTOMillis  int    `json:"initial_rto_millis,omitempty"`
+	MinRTOMillis      int    `json:"min_rto_millis,omitempty"`
+	MaxRTOMillis      int    `json:"max_rto_millis,omitempty"`
+	FastResend        int    `json:"fast_resend,omitempty"`
+	FECDataShards     int    `json:"fec_data_shards,omitempty"`
+	FECParityShards   int    `json:"fec_parity_shards,omitempty"`
+	SocketBufferBytes int    `json:"socket_buffer_bytes,omitempty"`
+	MaxRetries        int    `json:"max_retries,omitempty"`
 }
 
 type RawSettings struct {
@@ -59,6 +80,18 @@ type Mapping struct {
 	Protocol string `json:"protocol"`
 	Listen   string `json:"listen,omitempty"`
 	Target   string `json:"target,omitempty"`
+}
+
+// TUN enables an authenticated point-to-point layer-3 link over the selected
+// TCP or Quantum carrier. It is intentionally separate from raw/spoof settings:
+// TUN never changes the source address of the outer carrier packets.
+type TUN struct {
+	Enabled      bool     `json:"enabled"`
+	Name         string   `json:"name"`
+	LocalAddress string   `json:"local_address"`
+	PeerAddress  string   `json:"peer_address"`
+	MTU          int      `json:"mtu"`
+	Routes       []string `json:"routes,omitempty"`
 }
 
 type Health struct {
@@ -121,8 +154,14 @@ func (c *Config) applyDefaults() {
 	if c.Carrier.MaxStreamsPerSession == 0 {
 		c.Carrier.MaxStreamsPerSession = 512
 	}
+	if c.Carrier.Mode == "quantum_udp" {
+		c.Carrier.Quantum.applyDefaults()
+	}
 	if c.Carrier.Raw.PayloadMTU == 0 {
 		c.Carrier.Raw.PayloadMTU = 1200
+	}
+	if c.TUN != nil && c.TUN.Enabled && c.TUN.MTU == 0 {
+		c.TUN.MTU = 1280
 	}
 	if c.Security.PSKEnv == "" {
 		c.Security.PSKEnv = "V2QUANTUM_PSK"
@@ -179,11 +218,31 @@ func (c *Config) Validate() error {
 	if c.Carrier.MaxStreamsPerSession < 1 || c.Carrier.MaxStreamsPerSession > 65_535 {
 		errs = append(errs, errors.New("max_streams_per_session must be between 1 and 65535"))
 	}
+	if c.Carrier.Mode == "quantum_udp" {
+		if err := validateQuantum(c.Carrier.Quantum); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if len(c.Security.PSK) < 32 || len(c.Security.PSK) > 512 {
 		errs = append(errs, fmt.Errorf("security PSK must be 32-512 characters (or set %s)", c.Security.PSKEnv))
 	}
-	if len(c.Mappings) == 0 {
+	tunEnabled := c.TUN != nil && c.TUN.Enabled
+	if len(c.Mappings) == 0 && !tunEnabled {
 		errs = append(errs, errors.New("at least one mapping is required"))
+	}
+	if tunEnabled && len(c.Mappings) != 0 {
+		errs = append(errs, errors.New("tun mode and TCP mappings must use separate instances"))
+	}
+	if tunEnabled {
+		if c.Carrier.Mode == "raw_icmp" {
+			errs = append(errs, errors.New("tun mode supports tcp or quantum_udp carriers; raw_icmp remains a separate experimental mode"))
+		}
+		if c.Carrier.Pool != 1 {
+			errs = append(errs, errors.New("tun mode requires carrier.pool=1 to preserve packet order"))
+		}
+		if err := validateTUN(*c.TUN); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	seen := make(map[string]struct{}, len(c.Mappings))
 	for i, m := range c.Mappings {
@@ -290,6 +349,163 @@ func validateRaw(r RawSettings) error {
 	return nil
 }
 
+func (q *Quantum) applyDefaults() {
+	q.Profile = strings.ToLower(strings.TrimSpace(q.Profile))
+	if q.Profile == "" {
+		q.Profile = "balanced"
+	}
+	type defaults struct {
+		datagram, send, receive int
+		initialRTO, minRTO      int
+		maxRTO, fastResend      int
+		fecData, fecParity      int
+		socket, retries         int
+		auto                    bool
+	}
+	selected := defaults{1350, 512, 1024, 260, 80, 2500, 3, 8, 2, 12 << 20, 16, true}
+	switch q.Profile {
+	case "stable":
+		selected = defaults{1280, 256, 512, 320, 100, 3000, 2, 6, 2, 8 << 20, 16, true}
+	case "max":
+		selected = defaults{1400, 1024, 2048, 220, 60, 2000, 3, 10, 1, 16 << 20, 16, true}
+	case "manual":
+		selected = defaults{1350, 512, 1024, 260, 80, 2500, 3, 0, 0, 12 << 20, 16, false}
+	}
+	if q.AutoTune == nil {
+		value := selected.auto
+		q.AutoTune = &value
+	}
+	if q.MaxDatagramSize == 0 {
+		q.MaxDatagramSize = selected.datagram
+	}
+	if q.SendWindow == 0 {
+		q.SendWindow = selected.send
+	}
+	if q.ReceiveWindow == 0 {
+		q.ReceiveWindow = selected.receive
+	}
+	if q.InitialRTOMillis == 0 {
+		q.InitialRTOMillis = selected.initialRTO
+	}
+	if q.MinRTOMillis == 0 {
+		q.MinRTOMillis = selected.minRTO
+	}
+	if q.MaxRTOMillis == 0 {
+		q.MaxRTOMillis = selected.maxRTO
+	}
+	if q.FastResend == 0 {
+		q.FastResend = selected.fastResend
+	}
+	if q.FECDataShards == 0 && q.Profile != "manual" {
+		q.FECDataShards = selected.fecData
+	}
+	if q.FECParityShards == 0 && q.Profile != "manual" {
+		q.FECParityShards = selected.fecParity
+	}
+	if q.SocketBufferBytes == 0 {
+		q.SocketBufferBytes = selected.socket
+	}
+	if q.MaxRetries == 0 {
+		q.MaxRetries = selected.retries
+	}
+}
+
+func validateQuantum(q Quantum) error {
+	var errs []error
+	switch q.Profile {
+	case "stable", "balanced", "max", "manual":
+	default:
+		errs = append(errs, errors.New("carrier.quantum.profile must be stable, balanced, max, or manual"))
+	}
+	if q.AutoTune == nil {
+		errs = append(errs, errors.New("carrier.quantum.auto_tune must be set"))
+	}
+	if q.MaxDatagramSize < 576 || q.MaxDatagramSize > 1472 {
+		errs = append(errs, errors.New("carrier.quantum.max_datagram_size must be 576-1472"))
+	}
+	if q.SendWindow < 16 || q.SendWindow > 2048 {
+		errs = append(errs, errors.New("carrier.quantum.send_window must be 16-2048"))
+	}
+	if q.ReceiveWindow < 16 || q.ReceiveWindow > 4096 {
+		errs = append(errs, errors.New("carrier.quantum.receive_window must be 16-4096"))
+	}
+	if q.MinRTOMillis < 20 || q.MinRTOMillis > 5000 {
+		errs = append(errs, errors.New("carrier.quantum.min_rto_millis must be 20-5000"))
+	}
+	if q.InitialRTOMillis < q.MinRTOMillis || q.InitialRTOMillis > q.MaxRTOMillis {
+		errs = append(errs, errors.New("carrier.quantum.initial_rto_millis must be between min_rto_millis and max_rto_millis"))
+	}
+	if q.MaxRTOMillis < 100 || q.MaxRTOMillis > 30_000 {
+		errs = append(errs, errors.New("carrier.quantum.max_rto_millis must be 100-30000"))
+	}
+	if q.FastResend < 1 || q.FastResend > 20 {
+		errs = append(errs, errors.New("carrier.quantum.fast_resend must be 1-20"))
+	}
+	if q.FECDataShards != 0 && (q.FECDataShards < 2 || q.FECDataShards > 32) {
+		errs = append(errs, errors.New("carrier.quantum.fec_data_shards must be 0 or 2-32"))
+	}
+	if q.FECParityShards < 0 || q.FECParityShards > 8 {
+		errs = append(errs, errors.New("carrier.quantum.fec_parity_shards must be 0-8"))
+	}
+	if (q.FECDataShards == 0) != (q.FECParityShards == 0) {
+		errs = append(errs, errors.New("carrier.quantum FEC data and parity shards must both be enabled or both be zero"))
+	}
+	if q.SocketBufferBytes < 64<<10 || q.SocketBufferBytes > 64<<20 {
+		errs = append(errs, errors.New("carrier.quantum.socket_buffer_bytes must be 65536-67108864"))
+	}
+	if q.MaxRetries < 1 || q.MaxRetries > 64 {
+		errs = append(errs, errors.New("carrier.quantum.max_retries must be 1-64"))
+	}
+	return errors.Join(nonNil(errs)...)
+}
+
+func validateTUN(t TUN) error {
+	var errs []error
+	if !t.Enabled {
+		return errors.New("tun.enabled must be true when a tun block is present")
+	}
+	if len(t.Name) < 1 || len(t.Name) > 15 {
+		errs = append(errs, errors.New("tun.name must contain 1-15 characters"))
+	} else {
+		for _, r := range t.Name {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+				(r < '0' || r > '9') && r != '_' && r != '-' {
+				errs = append(errs, errors.New("tun.name may contain only letters, numbers, underscore, and dash"))
+				break
+			}
+		}
+	}
+	local, network, err := net.ParseCIDR(t.LocalAddress)
+	if err != nil || local.To4() == nil {
+		errs = append(errs, errors.New("tun.local_address must be an IPv4 CIDR"))
+	}
+	peer := net.ParseIP(t.PeerAddress)
+	if peer == nil || peer.To4() == nil {
+		errs = append(errs, errors.New("tun.peer_address must be an IPv4 address"))
+	} else if err == nil && network != nil && !network.Contains(peer) {
+		errs = append(errs, errors.New("tun.peer_address must be inside tun.local_address network"))
+	}
+	if err == nil && peer != nil && local.Equal(peer) {
+		errs = append(errs, errors.New("tun.local_address and tun.peer_address must be different"))
+	}
+	if t.MTU < 576 || t.MTU > 9000 {
+		errs = append(errs, errors.New("tun.mtu must be between 576 and 9000"))
+	}
+	seenRoutes := make(map[string]struct{}, len(t.Routes))
+	for i, route := range t.Routes {
+		ip, _, routeErr := net.ParseCIDR(route)
+		if routeErr != nil || ip.To4() == nil {
+			errs = append(errs, fmt.Errorf("tun.routes[%d] must be an IPv4 CIDR", i))
+			continue
+		}
+		if _, exists := seenRoutes[route]; exists {
+			errs = append(errs, fmt.Errorf("duplicate tun route %q", route))
+		}
+		seenRoutes[route] = struct{}{}
+	}
+	return errors.Join(nonNil(errs)...)
+}
+
 func nonNil(in []error) []error {
 	out := in[:0]
 	for _, err := range in {
@@ -314,4 +530,8 @@ func (c *Config) ReconnectMin() time.Duration {
 
 func (c *Config) ReconnectMax() time.Duration {
 	return time.Duration(c.Carrier.ReconnectMaxMillis) * time.Millisecond
+}
+
+func (c *Config) QuantumAutoTune() bool {
+	return c.Carrier.Quantum.AutoTune == nil || *c.Carrier.Quantum.AutoTune
 }

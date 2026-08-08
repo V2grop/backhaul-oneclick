@@ -10,7 +10,11 @@
     "dial_timeout_seconds": 8,
     "reconnect_min_millis": 500,
     "reconnect_max_millis": 15000,
-    "max_streams_per_session": 512
+    "max_streams_per_session": 512,
+    "quantum": {
+      "profile": "balanced",
+      "auto_tune": true
+    }
   },
   "security": {
     "psk_env": "V2QUANTUM_PSK"

@@ -3,15 +3,15 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.1.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
 
 BACKHAUL_URL="${TUNNEL_MANAGER_BACKHAUL_URL:-${RAW_BASE}/oneclick-v3-en.sh}"
 XWSMUX_MAX_PINNED_REF="${TUNNEL_MANAGER_XWSMUX_MAX_PINNED_REF:-db3b8b99eb966ddd2a8a77eee77e8c0abd157c94}"
-XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-https://raw.githubusercontent.com/${REPO}/${XWSMUX_MAX_PINNED_REF}/oneclick-xwsmux-max.sh}"
-XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
+XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
+XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-https://raw.githubusercontent.com/${REPO}/${XWSMUX_MAX_PINNED_REF}/oneclick-xwsmux-max.sh}"
 V2QUANTUM_URL="${TUNNEL_MANAGER_V2QUANTUM_URL:-${RAW_BASE}/v2quantum-oneclick.sh}"
 REALM_URL="${TUNNEL_MANAGER_REALM_URL:-https://raw.githubusercontent.com/Sir-Adnan/Realm-Tunnel-Manager/main/realm.sh}"
 SELF_URL="${TUNNEL_MANAGER_SELF_URL:-${RAW_BASE}/oneclick-universal.sh}"
@@ -53,6 +53,7 @@ Usage:
   tunnel-manager --backhaul          Backhaul: TCP/MUX/WS/TLS/TUN
   tunnel-manager --xwsmux-max        Optimized XWSMUX/Cloudflare profile
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
+  tunnel-manager --tun               Independent encrypted layer-3 TUN manager
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
   tunnel-manager --capabilities      Show engines and limitations
@@ -74,9 +75,9 @@ capabilities() {
   cat <<'EOF'
 ================ Included tunnel managers ================
 
-1) Backhaul (existing core; kept unchanged)
-   tcp, tcpmux, xtcpmux, ws, wss, wsmux, wssmux, xwsmux,
-   anytls and layer-3 tun.
+1) Backhaul (existing opaque core; kept unchanged)
+   tcp, tcpmux, xtcpmux, ws, wss, wsmux, wssmux, xwsmux
+   and anytls. Its unverified legacy TUN profile is not advertised here.
 
 2) XWSMUX Max (existing optimized Backhaul profile)
    Cloudflare WebSocket mux, token authentication, watchdog,
@@ -86,7 +87,8 @@ capabilities() {
    tcp, quantum_udp and experimental raw_icmp carriers, encrypted
    multiplexing, automatic Iran setup code, reconnect, watchdog,
    health checks, assigned-IP ICMP scanning, and controlled manual
-   Raw source/BIP fields.
+   Raw source/BIP fields. It also provides a separate working L3 TUN
+   over TCP or Quantum UDP with V2T1 setup codes and per-tunnel devices.
    quantum_udp is the carrier; user mappings are currently TCP.
 
 4) Realm Tunnel Manager (external open-source project)
@@ -164,7 +166,7 @@ run_plain_script() {
 run_backhaul() {
   echo
   printf '%sBackhaul full manager%s\n' "$cyan" "$reset"
-  echo "Transports: tcp/tcpmux/xtcpmux/ws/wss/wsmux/wssmux/xwsmux/anytls/tun"
+  echo "Layer-4 transports: tcp/tcpmux/xtcpmux/ws/wss/wsmux/wssmux/xwsmux/anytls"
   echo "The existing Backhaul core and working WSMUX services are preserved."
   echo
   run_plain_script "$BACKHAUL_URL" backhaul
@@ -180,7 +182,7 @@ run_xwsmux_max() {
     bash "$script"
     return
   fi
-  warn "Pinned XWSMUX Max download failed; trying the selected ref $REF."
+  warn "Selected XWSMUX Max download failed; trying the last verified fallback."
   script="$(download_script "$XWSMUX_MAX_FALLBACK_URL" xwsmux-max-fallback)" || return 1
   bash "$script"
 }
@@ -192,14 +194,16 @@ backhaul_menu() {
     echo "===================================================="
     echo "                  Backhaul family"
     echo "===================================================="
-    echo "1) Standard manager - all transports including TUN"
+    echo "1) Standard Backhaul - layer-4 transports"
     echo "2) XWSMUX Max - optimized Cloudflare profile"
+    echo "3) V2TUN - independent encrypted layer-3 tunnel"
     echo "0) Return to universal menu"
     echo
-    IFS= read -r -p "Choose [0-2]: " choice
+    IFS= read -r -p "Choose [0-3]: " choice
     case "${choice,,}" in
       1|standard|backhaul) run_backhaul || warn "Backhaul manager exited with an error."; pause_menu ;;
       2|xwsmux|max) run_xwsmux_max || warn "XWSMUX Max manager exited with an error."; pause_menu ;;
+      3|tun|v2tun) run_v2tun || warn "V2TUN manager exited with an error."; pause_menu ;;
       0|back|return|q|quit) return 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -207,13 +211,23 @@ backhaul_menu() {
 }
 
 run_v2quantum() {
+  local manager_mode="${1:-all}"
   echo
-  printf '%sV2Quantum independent manager%s\n' "$cyan" "$reset"
-  echo "Modes: TCP, Quantum UDP carrier, and experimental Raw ICMP spoof/BIP."
+  if [[ "$manager_mode" == "tun" ]]; then
+    printf '%sV2TUN independent layer-3 manager%s\n' "$cyan" "$reset"
+    echo "Encrypted point-to-point TUN over TCP or Quantum UDP."
+  else
+    printf '%sV2Quantum independent manager%s\n' "$cyan" "$reset"
+    echo "Modes: TCP, Quantum UDP carrier, and experimental Raw ICMP spoof/BIP."
+  fi
   echo "This engine has no Pengu/Dagger/Backhaul license dependency."
   echo
   if [[ -x "$V2QUANTUM_MANAGER_COMMAND" ]]; then
-    "$V2QUANTUM_MANAGER_COMMAND"
+    if [[ "$manager_mode" == "tun" ]]; then
+      "$V2QUANTUM_MANAGER_COMMAND" --tun
+    else
+      "$V2QUANTUM_MANAGER_COMMAND"
+    fi
     return
   fi
 
@@ -228,7 +242,12 @@ run_v2quantum() {
     V2QUANTUM_REPO="$REPO" \
     V2QUANTUM_REF="$REF" \
     V2QUANTUM_ALLOW_SOURCE_BUILD="$allow_source" \
+    V2QUANTUM_MANAGER_MODE="$manager_mode" \
     bash "$script"
+}
+
+run_v2tun() {
+  run_v2quantum tun
 }
 
 run_realm() {
@@ -342,6 +361,7 @@ while (( $# > 0 )); do
     --backhaul) ACTION="backhaul" ;;
     --xwsmux-max) ACTION="xwsmux-max" ;;
     --v2quantum) ACTION="v2quantum" ;;
+    --tun) ACTION="tun" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
     --capabilities) ACTION="capabilities" ;;
@@ -362,6 +382,7 @@ case "$ACTION" in
   backhaul) run_backhaul ;;
   xwsmux-max) run_xwsmux_max ;;
   v2quantum) run_v2quantum ;;
+  tun) run_v2tun ;;
   realm) run_realm ;;
   status) show_status ;;
   capabilities) capabilities ;;

@@ -71,6 +71,7 @@ test -x "$INSTALL_MANAGER"
 test -x "$INSTALLER_PATH"
 test -x "$INSTALL_WATCHDOG"
 test -s "$INSTALL_UNIT"
+grep -q 'CAP_NET_ADMIN' "$INSTALL_UNIT"
 test -s "$INSTALL_WATCHDOG_UNIT"
 test -s "$INSTALL_WATCHDOG_TIMER"
 "$INSTALL_BIN" version | grep -q '^v2quantum-go '

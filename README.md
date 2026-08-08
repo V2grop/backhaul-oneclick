@@ -12,14 +12,15 @@ Public command after this branch is merged into `main`:
 bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/oneclick-universal.sh)
 ```
 
-The unified menu contains one Backhaul submenu (Standard and XWSMUX Max are
-grouped together instead of appearing as duplicate top-level engines):
+The unified menu contains one tunnel-family submenu. Standard Backhaul,
+XWSMUX Max and the independent V2TUN entry are grouped instead of appearing as
+duplicate top-level engines:
 
 | Menu | Engine | Modes |
 |---|---|---|
-| Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX, AnyTLS, TUN |
-| XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, watchdog and rollback |
-| V2Quantum | Independent MIT-licensed Go core | TCP, Quantum UDP carrier, experimental Raw ICMP spoof/BIP |
+| Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX and AnyTLS |
+| XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, 15-second transport watchdog, staged recovery and rollback |
+| V2Quantum | Independent MIT-licensed Go core | TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
 | Realm | External open-source Realm manager | TCP and UDP layer-4 port forwarding |
 
 The launcher itself, V2Quantum and Realm do not use Pengu or Dagger licensed
@@ -28,7 +29,7 @@ is deliberately not rewritten by the launcher. V2Quantum user mappings are TCP;
 `quantum_udp` describes its carrier. Use Realm when a separate UDP port forward
 is required.
 
-After choosing menu item 6, the same manager can be opened later with:
+After choosing the shortcut-install item, the same manager can be opened later with:
 
 ```bash
 tunnel-manager
@@ -40,9 +41,22 @@ Useful direct actions:
 tunnel-manager --backhaul
 tunnel-manager --xwsmux-max
 tunnel-manager --v2quantum
+tunnel-manager --tun
 tunnel-manager --realm
 tunnel-manager --status
 ```
+
+Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
+token file, systemd instance, health port and watchdog state. Creating a second
+tunnel therefore does not replace the first one. Setup codes use `V2Q3_` for
+reverse TCP mappings and `V2T2_` for the independent point-to-point TUN. The
+manager accepts the older prefixes for migration, but both peers must run the
+new core before using the Quantum v2 wire protocol.
+
+The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
+as working. The menu's supported L3 option is the source-built V2TUN core; it
+uses `/dev/net/tun`, `CAP_NET_ADMIN`, a non-persistent per-instance interface,
+encrypted frames and TCP or Quantum UDP as its outer carrier.
 
 Raw setup offers an assigned-IP ICMP scanner, authorized manual entry, or a
 real-IP-only mode. The automatic scanner ranks only addresses assigned to the

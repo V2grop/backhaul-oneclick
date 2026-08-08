@@ -26,7 +26,7 @@ done
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'printf '\''v2quantum:%s:%s\n'\'' "${V2QUANTUM_REF:-}" "${V2QUANTUM_ALLOW_SOURCE_BUILD:-}" >>"${TUNNEL_TEST_LOG:?}"' \
+  'printf '\''v2quantum:%s:%s:%s\n'\'' "${V2QUANTUM_REF:-}" "${V2QUANTUM_ALLOW_SOURCE_BUILD:-}" "${V2QUANTUM_MANAGER_MODE:-}" >>"${TUNNEL_TEST_LOG:?}"' \
   >"$FIXTURES/v2quantum.sh"
 
 FAKE_CURL="$TMP_DIR/curl"
@@ -86,6 +86,7 @@ COMMON_ENV=(
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --help >"$TMP_DIR/help.txt"
 grep -q -- '--xwsmux-max' "$TMP_DIR/help.txt"
 grep -q -- '--v2quantum' "$TMP_DIR/help.txt"
+grep -q -- '--tun' "$TMP_DIR/help.txt"
 grep -q -- '--realm' "$TMP_DIR/help.txt"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --backhaul >/dev/null
@@ -93,12 +94,14 @@ env "${COMMON_ENV[@]}" \
   TUNNEL_MANAGER_XWSMUX_MAX_URL=https://invalid.example/missing-xwsmux.sh \
   bash "$LAUNCHER" --xwsmux-max >/dev/null 2>&1
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --v2quantum >/dev/null
+env "${COMMON_ENV[@]}" bash "$LAUNCHER" --tun >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 
 grep -qx 'backhaul' "$LOG"
 grep -qx 'xwsmux' "$LOG"
 grep -qx 'realm' "$LOG"
-grep -qx 'v2quantum:codex/v2quantum-go-v1:1' "$LOG"
+grep -qx 'v2quantum:codex/v2quantum-go-v1:1:all' "$LOG"
+grep -qx 'v2quantum:codex/v2quantum-go-v1:1:tun' "$LOG"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --status >"$TMP_DIR/status.txt"
 grep -q 'service test loaded active running' "$TMP_DIR/status.txt"
@@ -108,6 +111,7 @@ env "${COMMON_ENV[@]}" bash "$LAUNCHER" --capabilities >"$TMP_DIR/capabilities.t
 grep -q 'Pengu and Dagger licensed binaries are not bundled' "$TMP_DIR/capabilities.txt"
 grep -q 'quantum_udp is the carrier' "$TMP_DIR/capabilities.txt"
 grep -q 'assigned-IP ICMP scanning' "$TMP_DIR/capabilities.txt"
+grep -q 'separate working L3 TUN' "$TMP_DIR/capabilities.txt"
 grep -q 'mirrors.aliyun.com/golang' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 grep -q 'golang.google.cn/dl' "$PROJECT_DIR/v2quantum-go/scripts/oneclick.sh"
 
@@ -127,7 +131,8 @@ fi
 
 printf '1\n0\n0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/backhaul-menu.txt"
 grep -q 'Backhaul family' "$TMP_DIR/backhaul-menu.txt"
-grep -q '1) Standard manager - all transports including TUN' "$TMP_DIR/backhaul-menu.txt"
+grep -q '1) Standard Backhaul - layer-4 transports' "$TMP_DIR/backhaul-menu.txt"
 grep -q '2) XWSMUX Max - optimized Cloudflare profile' "$TMP_DIR/backhaul-menu.txt"
+grep -q '3) V2TUN - independent encrypted layer-3 tunnel' "$TMP_DIR/backhaul-menu.txt"
 
 echo "universal launcher tests passed"

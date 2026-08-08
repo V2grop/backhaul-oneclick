@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -12,19 +13,27 @@ import (
 
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/config"
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/quantum"
+	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/quantumv2"
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/rawip"
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/secure"
+	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/tun"
 )
 
 type Runtime struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	stats  *Stats
-	pool   *sessionPool
+	cfg     *config.Config
+	logger  *slog.Logger
+	stats   *Stats
+	pool    *sessionPool
+	openTUN tun.OpenFunc
+	tunDev  tun.Device
+	tunIn   chan []byte
 }
 
 func NewRuntime(cfg *config.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{cfg: cfg, logger: logger, stats: &Stats{}, pool: newSessionPool()}
+	return &Runtime{
+		cfg: cfg, logger: logger, stats: &Stats{}, pool: newSessionPool(),
+		openTUN: tun.Open,
+	}
 }
 
 func (r *Runtime) Snapshot() Snapshot { return r.stats.Snapshot() }
@@ -34,10 +43,116 @@ func (r *Runtime) Ready() bool {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	if r.cfg.TUN != nil && r.cfg.TUN.Enabled {
+		return r.runTUN(ctx)
+	}
+	return r.runRole(ctx)
+}
+
+func (r *Runtime) runRole(ctx context.Context) error {
 	if r.cfg.Role == "server" {
 		return r.runServer(ctx)
 	}
 	return r.runClient(ctx)
+}
+
+func (r *Runtime) runTUN(ctx context.Context) error {
+	device, err := r.openTUN(ctx, *r.cfg.TUN)
+	if err != nil {
+		return fmt.Errorf("initialize tun: %w", err)
+	}
+	r.tunDev = device
+	r.tunIn = make(chan []byte, 1024)
+	r.logger.Info("tun interface ready", "device", device.Name(), "address", r.cfg.TUN.LocalAddress, "peer", r.cfg.TUN.PeerAddress, "mtu", r.cfg.TUN.MTU)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer device.Close()
+	errCh := make(chan error, 3)
+	go func() { errCh <- r.runRole(runCtx) }()
+	go func() { errCh <- r.readTUN(runCtx) }()
+	go func() { errCh <- r.writeTUN(runCtx) }()
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errCh:
+		if err == nil || IsExpectedShutdown(err) {
+			return nil
+		}
+		return err
+	}
+}
+
+func (r *Runtime) readTUN(ctx context.Context) error {
+	buffer := make([]byte, r.cfg.TUN.MTU+256)
+	for {
+		n, err := r.tunDev.Read(buffer)
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("read tun packet: %w", err)
+		}
+		if n == 0 {
+			continue
+		}
+		packet := append([]byte(nil), buffer[:n]...)
+		for {
+			s, err := r.pool.waitPick(ctx)
+			if err != nil {
+				return nil
+			}
+			if err := s.sendPacket(packet); err != nil {
+				s.close(err)
+				continue
+			}
+			r.stats.tunPacketsToPeer.Add(1)
+			r.stats.tunBytesToPeer.Add(int64(len(packet)))
+			break
+		}
+	}
+}
+
+func (r *Runtime) writeTUN(ctx context.Context) error {
+	for {
+		select {
+		case packet := <-r.tunIn:
+			n, err := r.tunDev.Write(packet)
+			if err != nil {
+				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+					return nil
+				}
+				return fmt.Errorf("write tun packet: %w", err)
+			}
+			if n != len(packet) {
+				return fmt.Errorf("write tun packet: %w (%d of %d bytes)", io.ErrShortWrite, n, len(packet))
+			}
+			r.stats.tunPacketsFromPeer.Add(1)
+			r.stats.tunBytesFromPeer.Add(int64(len(packet)))
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (r *Runtime) receiveTUNPacket(packet []byte) error {
+	if r.tunIn == nil {
+		return errors.New("peer sent a tun packet to a non-tun instance")
+	}
+	if len(packet) < 1 || (packet[0]>>4 != 4 && packet[0]>>4 != 6) {
+		return errors.New("peer sent an invalid IP packet")
+	}
+	if len(packet) > r.cfg.TUN.MTU+256 {
+		return fmt.Errorf("peer tun packet exceeds configured MTU: %d", len(packet))
+	}
+	copyPacket := append([]byte(nil), packet...)
+	select {
+	case r.tunIn <- copyPacket:
+		return nil
+	default:
+		return errors.New("tun receive queue is full")
+	}
 }
 
 func (r *Runtime) runServer(ctx context.Context) error {
@@ -95,7 +210,11 @@ func (r *Runtime) acceptCarriers(ctx context.Context, listener net.Listener) {
 				r.logger.Warn("carrier authentication rejected", "remote", raw.RemoteAddr(), "error", err)
 				return
 			}
-			s := newSession(secured, r.logger, r.stats, nil, false, r.cfg.Carrier.MaxStreamsPerSession, r.cfg.Keepalive(), r.cfg.DialTimeout())
+			var packetHandler func([]byte) error
+			if r.cfg.TUN != nil && r.cfg.TUN.Enabled {
+				packetHandler = r.receiveTUNPacket
+			}
+			s := newSession(secured, r.logger, r.stats, nil, false, packetHandler, r.cfg.Carrier.MaxStreamsPerSession, r.cfg.Keepalive(), r.cfg.DialTimeout())
 			r.pool.add(s)
 			r.logger.Info("carrier connected", "remote", raw.RemoteAddr(), "sessions", r.pool.count())
 			s.wait()
@@ -180,7 +299,11 @@ func (r *Runtime) clientSlot(ctx context.Context, slot int, targets map[string]s
 			continue
 		}
 		backoff = r.cfg.ReconnectMin()
-		s := newSession(secured, r.logger, r.stats, targets, true, r.cfg.Carrier.MaxStreamsPerSession, r.cfg.Keepalive(), r.cfg.DialTimeout())
+		var packetHandler func([]byte) error
+		if r.cfg.TUN != nil && r.cfg.TUN.Enabled {
+			packetHandler = r.receiveTUNPacket
+		}
+		s := newSession(secured, r.logger, r.stats, targets, true, packetHandler, r.cfg.Carrier.MaxStreamsPerSession, r.cfg.Keepalive(), r.cfg.DialTimeout())
 		r.pool.add(s)
 		r.logger.Info("carrier connected", "slot", slot, "server", r.cfg.Carrier.Server)
 		select {
@@ -198,7 +321,7 @@ func (r *Runtime) listenCarrier() (net.Listener, error) {
 	case "tcp":
 		return net.Listen("tcp", r.cfg.Carrier.Listen)
 	case "quantum_udp":
-		return quantum.Listen(r.cfg.Carrier.Listen, 4*r.cfg.Keepalive())
+		return quantumv2.Listen(r.cfg.Carrier.Listen, 4*r.cfg.Keepalive(), r.quantumSettings())
 	case "raw_icmp":
 		packetConn, err := rawip.ListenPacket(r.cfg.Carrier.Raw, true)
 		if err != nil {
@@ -220,7 +343,7 @@ func (r *Runtime) dialCarrier(ctx context.Context) (net.Conn, error) {
 		}
 		return conn, err
 	case "quantum_udp":
-		return quantum.DialContext(ctx, r.cfg.Carrier.Server, r.cfg.DialTimeout(), 4*r.cfg.Keepalive())
+		return quantumv2.DialContext(ctx, r.cfg.Carrier.Server, r.cfg.DialTimeout(), 4*r.cfg.Keepalive(), r.quantumSettings())
 	case "raw_icmp":
 		packetConn, err := rawip.ListenPacket(r.cfg.Carrier.Raw, false)
 		if err != nil {
@@ -229,6 +352,26 @@ func (r *Runtime) dialCarrier(ctx context.Context) (net.Conn, error) {
 		return quantum.DialPacket(ctx, packetConn, rawip.ExpectedPeerAddr(r.cfg.Carrier.Raw), r.cfg.DialTimeout(), 4*r.cfg.Keepalive())
 	default:
 		return nil, fmt.Errorf("unsupported carrier mode %q", r.cfg.Carrier.Mode)
+	}
+}
+
+func (r *Runtime) quantumSettings() quantumv2.Settings {
+	q := r.cfg.Carrier.Quantum
+	return quantumv2.Settings{
+		Profile:           q.Profile,
+		AutoTune:          r.cfg.QuantumAutoTune(),
+		MaxDatagramSize:   q.MaxDatagramSize,
+		SendWindow:        q.SendWindow,
+		ReceiveWindow:     q.ReceiveWindow,
+		InitialRTO:        time.Duration(q.InitialRTOMillis) * time.Millisecond,
+		MinRTO:            time.Duration(q.MinRTOMillis) * time.Millisecond,
+		MaxRTO:            time.Duration(q.MaxRTOMillis) * time.Millisecond,
+		FastResend:        q.FastResend,
+		FECDataShards:     q.FECDataShards,
+		FECParityShards:   q.FECParityShards,
+		SocketBufferBytes: q.SocketBufferBytes,
+		MaxRetries:        q.MaxRetries,
+		Observer:          quantumObserver{stats: r.stats},
 	}
 }
 

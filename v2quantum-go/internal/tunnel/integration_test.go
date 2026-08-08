@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/config"
+	v2tun "github.com/V2grop/backhaul-oneclick/v2quantum-go/internal/tun"
 )
 
 func TestEncryptedReverseTunnelEndToEnd(t *testing.T) {
@@ -94,6 +95,62 @@ func TestClientReconnectsAfterCarrierDrop(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTUNPacketsCrossEncryptedCarrier(t *testing.T) {
+	carrierAddr := reserveCarrierAddress(t, "tcp")
+	psk := strings.Repeat("tun-integration-secret-", 3)
+	serverCfg := testConfig("server", psk)
+	serverCfg.Carrier.Listen = carrierAddr
+	serverCfg.Carrier.Pool = 1
+	serverCfg.Mappings = nil
+	serverCfg.TUN = &config.TUN{Enabled: true, Name: "v2qserver", LocalAddress: "10.77.0.1/30", PeerAddress: "10.77.0.2", MTU: 1280}
+	clientCfg := testConfig("client", psk)
+	clientCfg.Carrier.Server = carrierAddr
+	clientCfg.Carrier.Pool = 1
+	clientCfg.Mappings = nil
+	clientCfg.TUN = &config.TUN{Enabled: true, Name: "v2qclient", LocalAddress: "10.77.0.2/30", PeerAddress: "10.77.0.1", MTU: 1280}
+
+	serverDevice := newFakeTUN("v2qserver")
+	clientDevice := newFakeTUN("v2qclient")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := NewRuntime(serverCfg, logger)
+	client := NewRuntime(clientCfg, logger)
+	server.openTUN = func(context.Context, config.TUN) (v2tun.Device, error) { return serverDevice, nil }
+	client.openTUN = func(context.Context, config.TUN) (v2tun.Device, error) { return clientDevice, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 2)
+	go func() { errCh <- server.Run(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	go func() { errCh <- client.Run(ctx) }()
+	waitReady(t, server, client)
+
+	serverToClient := append([]byte{0x45}, bytes.Repeat([]byte{0x11}, 63)...)
+	serverDevice.inject(serverToClient)
+	if got := clientDevice.receive(t); !bytes.Equal(got, serverToClient) {
+		t.Fatalf("server-to-client TUN packet mismatch: %x", got)
+	}
+	clientToServer := append([]byte{0x45}, bytes.Repeat([]byte{0x22}, 47)...)
+	clientDevice.inject(clientToServer)
+	if got := serverDevice.receive(t); !bytes.Equal(got, clientToServer) {
+		t.Fatalf("client-to-server TUN packet mismatch: %x", got)
+	}
+	if server.Snapshot().TUNPacketsFromPeer == 0 || client.Snapshot().TUNPacketsFromPeer == 0 {
+		t.Fatalf("TUN counters were not updated: server=%+v client=%+v", server.Snapshot(), client.Snapshot())
+	}
+
+	cancel()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("TUN runtime shutdown: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("TUN runtime did not shut down")
+		}
 	}
 }
 
@@ -287,5 +344,61 @@ func startEcho(t *testing.T) (string, func()) {
 	return listener.Addr().String(), func() {
 		cancel()
 		_ = listener.Close()
+	}
+}
+
+type fakeTUN struct {
+	name   string
+	reads  chan []byte
+	writes chan []byte
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newFakeTUN(name string) *fakeTUN {
+	return &fakeTUN{name: name, reads: make(chan []byte, 8), writes: make(chan []byte, 8), closed: make(chan struct{})}
+}
+
+func (d *fakeTUN) Name() string { return d.name }
+
+func (d *fakeTUN) Read(p []byte) (int, error) {
+	select {
+	case packet := <-d.reads:
+		if len(packet) > len(p) {
+			return 0, io.ErrShortBuffer
+		}
+		return copy(p, packet), nil
+	case <-d.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func (d *fakeTUN) Write(p []byte) (int, error) {
+	packet := append([]byte(nil), p...)
+	select {
+	case d.writes <- packet:
+		return len(p), nil
+	case <-d.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func (d *fakeTUN) Close() error {
+	d.once.Do(func() { close(d.closed) })
+	return nil
+}
+
+func (d *fakeTUN) inject(packet []byte) {
+	d.reads <- append([]byte(nil), packet...)
+}
+
+func (d *fakeTUN) receive(t *testing.T) []byte {
+	t.Helper()
+	select {
+	case packet := <-d.writes:
+		return packet
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a TUN packet")
+		return nil
 	}
 }
