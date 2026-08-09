@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.4.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -13,6 +13,7 @@ XWSMUX_MAX_PINNED_REF="${TUNNEL_MANAGER_XWSMUX_MAX_PINNED_REF:-db3b8b99eb966ddd2
 XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
 XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-https://raw.githubusercontent.com/${REPO}/${XWSMUX_MAX_PINNED_REF}/oneclick-xwsmux-max.sh}"
 V2QUANTUM_URL="${TUNNEL_MANAGER_V2QUANTUM_URL:-${RAW_BASE}/v2quantum-oneclick.sh}"
+DAGGER_LOCAL_URL="${TUNNEL_MANAGER_DAGGER_LOCAL_URL:-${RAW_BASE}/oneclick-dagger-local.sh}"
 REALM_URL="${TUNNEL_MANAGER_REALM_URL:-https://raw.githubusercontent.com/Sir-Adnan/Realm-Tunnel-Manager/main/realm.sh}"
 SELF_URL="${TUNNEL_MANAGER_SELF_URL:-${RAW_BASE}/oneclick-universal.sh}"
 
@@ -55,6 +56,7 @@ Usage:
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
   tunnel-manager --fusion            FusionMux: Quantum + WebSocket + TCP failover
   tunnel-manager --tun               Independent encrypted layer-3 TUN manager
+  tunnel-manager --dagger-local      Verify and run a user-supplied Dagger bundle
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
   tunnel-manager --capabilities      Show engines and limitations
@@ -98,12 +100,20 @@ capabilities() {
    acknowledgements, deduplication and bounded replay allow an existing
    TCP connection to resume on a healthy path instead of being recreated.
 
-5) Realm Tunnel Manager (external open-source project)
+5) Dagger External/Local (independent third-party engine)
+   The Dagger binary and setup.sh are never bundled or downloaded by this
+   repository. A separate adapter verifies operator-supplied local files by
+   SHA256, stages private temporary copies, and runs the original setup copy
+   unchanged. Dagger services/configs remain under their own names. Its
+   optional System Optimizer changes global sysctl/qdisc settings and therefore
+   must not be selected when strict isolation from other engines is required.
+
+6) Realm Tunnel Manager (external open-source project)
    Optional direct layer-4 TCP/UDP port forwarding.
 
-Pengu and Dagger licensed binaries are not bundled or required by this
-launcher. Raw spoof/BIP works only when both the route and provider policy
-permit it; the program cannot bypass provider anti-spoofing.
+Pengu and Dagger binaries are not bundled or required by this launcher. Raw
+spoof/BIP works only when both the route and provider policy permit it; the
+program cannot bypass provider anti-spoofing.
 EOF
 }
 
@@ -266,6 +276,15 @@ run_fusion() {
   run_v2quantum fusion
 }
 
+run_dagger_local() {
+  echo
+  printf '%sDagger External/Local adapter%s\n' "$cyan" "$reset"
+  echo "Independent third-party engine; Backhaul and V2Quantum are not modified."
+  echo "The adapter requires local setup.sh and binary paths and verifies both by SHA256."
+  echo
+  run_plain_script "$DAGGER_LOCAL_URL" dagger-local
+}
+
 run_realm() {
   echo
   printf '%sRealm TCP/UDP Port Forward%s\n' "$cyan" "$reset"
@@ -285,9 +304,11 @@ show_status() {
   echo "================ Tunnel services ================"
   if command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1; then
     "$SYSTEMCTL_BIN" list-units --all --type=service --no-legend --no-pager \
-      'backhaul-*.service' 'v2quantum@*.service' 'realm.service' 2>/dev/null || true
+      'backhaul-*.service' 'v2quantum@*.service' 'DaggerConnect-*.service' \
+      'realm.service' 2>/dev/null || true
     "$SYSTEMCTL_BIN" list-units --all --type=timer --no-legend --no-pager \
-      'backhaul-*.timer' 'v2quantum-watchdog@*.timer' 2>/dev/null || true
+      'backhaul-*.timer' 'v2quantum-watchdog@*.timer' \
+      'daggerconnect-auto-restart.timer' 2>/dev/null || true
   else
     warn "systemctl is unavailable."
   fi
@@ -300,6 +321,9 @@ show_status() {
   [[ -x /usr/local/bin/v2quantum ]] \
     && /usr/local/bin/v2quantum version 2>/dev/null \
     || echo "V2Quantum: not installed"
+  [[ -x /usr/local/bin/DaggerConnect ]] \
+    && echo "Dagger External: installed at /usr/local/bin/DaggerConnect" \
+    || echo "Dagger External: not installed"
   [[ -x /usr/local/bin/realm ]] \
     && /usr/local/bin/realm --version 2>/dev/null \
     || echo "Realm: not installed"
@@ -308,7 +332,7 @@ show_status() {
   echo "================ Tunnel listeners ================"
   if command -v "$SS_BIN" >/dev/null 2>&1; then
     "$SS_BIN" -H -lntup 2>/dev/null \
-      | grep -Ei 'backhaul|v2quantum|realm' \
+      | grep -Ei 'backhaul|v2quantum|dagger|realm' \
       || echo "No process-tagged tunnel listener was found."
   else
     warn "ss is unavailable; install iproute2 for listener diagnostics."
@@ -350,22 +374,24 @@ menu() {
     echo "===================================================="
     echo "1) Backhaul family - Standard / XWSMUX Max / TUN"
     echo "2) V2Quantum family - TCP / Quantum / Raw / FusionMux / TUN"
-    echo "3) Realm - TCP/UDP port forwarding"
-    echo "4) Unified status and diagnostics"
-    echo "5) Install/update tunnel-manager shortcut"
-    echo "6) Remove only the launcher shortcut"
-    echo "7) Capabilities and important limitations"
+    echo "3) Dagger External/Local - verified user-supplied bundle"
+    echo "4) Realm - TCP/UDP port forwarding"
+    echo "5) Unified status and diagnostics"
+    echo "6) Install/update tunnel-manager shortcut"
+    echo "7) Remove only the launcher shortcut"
+    echo "8) Capabilities and important limitations"
     echo "0) Exit"
     echo
-    IFS= read -r -p "Choose [0-7]: " choice
+    IFS= read -r -p "Choose [0-8]: " choice
     case "${choice,,}" in
       1|backhaul) backhaul_menu ;;
       2|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
-      3|realm|forward) run_realm || warn "Realm manager exited with an error."; pause_menu ;;
-      4|status|diag) show_status; pause_menu ;;
-      5|install|update) install_shortcut; pause_menu ;;
-      6|remove|uninstall) remove_shortcut; pause_menu ;;
-      7|info|capabilities) capabilities; pause_menu ;;
+      3|dagger|dagger-local) run_dagger_local || warn "Dagger local adapter exited with an error."; pause_menu ;;
+      4|realm|forward) run_realm || warn "Realm manager exited with an error."; pause_menu ;;
+      5|status|diag) show_status; pause_menu ;;
+      6|install|update) install_shortcut; pause_menu ;;
+      7|remove|uninstall) remove_shortcut; pause_menu ;;
+      8|info|capabilities) capabilities; pause_menu ;;
       0|q|quit|exit) exit 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -379,6 +405,7 @@ while (( $# > 0 )); do
     --v2quantum) ACTION="v2quantum" ;;
     --fusion) ACTION="fusion" ;;
     --tun) ACTION="tun" ;;
+    --dagger-local) ACTION="dagger-local" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
     --capabilities) ACTION="capabilities" ;;
@@ -401,6 +428,7 @@ case "$ACTION" in
   v2quantum) run_v2quantum ;;
   fusion) run_fusion ;;
   tun) run_v2tun ;;
+  dagger-local) run_dagger_local ;;
   realm) run_realm ;;
   status) show_status ;;
   capabilities) capabilities ;;

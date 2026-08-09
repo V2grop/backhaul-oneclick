@@ -21,13 +21,15 @@ duplicate top-level engines:
 | Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX and AnyTLS |
 | XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, 15-second transport watchdog, staged recovery and rollback |
 | V2Quantum | Independent MIT-licensed Go core | FusionMux failover, TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
+| Dagger External/Local | Independent third-party local bundle | Verifies operator-supplied `setup.sh` and binary by SHA256, then runs the original setup copy unchanged |
 | Realm | External open-source Realm manager | TCP and UDP layer-4 port forwarding |
 
-The launcher itself, V2Quantum and Realm do not use Pengu or Dagger licensed
-binaries. Backhaul remains the existing core selected by the server owner and
-is deliberately not rewritten by the launcher. V2Quantum user mappings are TCP;
-`quantum_udp` describes its carrier. Use Realm when a separate UDP port forward
-is required.
+Backhaul and V2Quantum do not use the Dagger engine. The Dagger menu item is an
+explicit, separate local adapter: neither third-party file is stored or
+downloaded by this repository. Backhaul remains the existing core selected by
+the server owner and is deliberately not rewritten by the launcher. V2Quantum
+user mappings are TCP; `quantum_udp` describes its carrier. Use Realm when a
+separate UDP port forward is required.
 
 After choosing the shortcut-install item, the same manager can be opened later with:
 
@@ -43,9 +45,37 @@ tunnel-manager --xwsmux-max
 tunnel-manager --v2quantum
 tunnel-manager --fusion
 tunnel-manager --tun
+tunnel-manager --dagger-local
 tunnel-manager --realm
 tunnel-manager --status
 ```
+
+### Independent Dagger local adapter
+
+The universal menu's option `3` opens `oneclick-dagger-local.sh`. The adapter
+does not contain, modify or download Dagger. Copy the two files you are
+authorized to use onto the server, then select option `3` and enter their local
+paths. The currently recognized bundle fingerprints are:
+
+```text
+setup.sh:                    1f8893c74381bc84b73bdc1f68dadc2f8f39c1ce5b66402d71f77f5394535ad3
+DaggerConnect3.2.patched:    ac19385f703c9db5bf3bb50c66fe874f53478d307f31f3fc6defc74c49ffddbc
+```
+
+Direct non-interactive path selection is also available:
+
+```bash
+DAGGER_SETUP_PATH=/root/setup.sh \
+DAGGER_BINARY_PATH=/root/DaggerConnect3.2.patched \
+tunnel-manager --dagger-local
+```
+
+The adapter verifies the source files, re-verifies private temporary copies and
+automatically supplies the verified temporary binary path when the original
+setup asks for it. The original setup remains responsible for Dagger services
+and configs. Do not select its `System Optimizer` when strict isolation is
+required: that third-party action changes host-wide sysctl and qdisc settings
+and can affect every network service on the server.
 
 Compatibility bootstrap for the complete manager (all previous engines remain
 available):

@@ -17,7 +17,7 @@ LOG="$TMP_DIR/actions.log"
 SHORTCUT="$TMP_DIR/tunnel-manager"
 mkdir -p "$FIXTURES"
 
-for name in backhaul xwsmux realm; do
+for name in backhaul xwsmux dagger realm; do
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     "printf '${name}\\n' >>\"\${TUNNEL_TEST_LOG:?}\"" \
@@ -46,6 +46,7 @@ printf '%s\n' \
   '  */oneclick-v3-en.sh) source_file="$TUNNEL_TEST_FIXTURES/backhaul.sh" ;;' \
   '  */oneclick-xwsmux-max.sh) source_file="$TUNNEL_TEST_FIXTURES/xwsmux.sh" ;;' \
   '  */v2quantum-oneclick.sh) source_file="$TUNNEL_TEST_FIXTURES/v2quantum.sh" ;;' \
+  '  */oneclick-dagger-local.sh) source_file="$TUNNEL_TEST_FIXTURES/dagger.sh" ;;' \
   '  */realm.sh) source_file="$TUNNEL_TEST_FIXTURES/realm.sh" ;;' \
   '  */oneclick-universal.sh) source_file="$TUNNEL_TEST_LAUNCHER" ;;' \
   '  *) echo "unexpected URL: $url" >&2; exit 1 ;;' \
@@ -88,6 +89,7 @@ grep -q -- '--xwsmux-max' "$TMP_DIR/help.txt"
 grep -q -- '--v2quantum' "$TMP_DIR/help.txt"
 grep -q -- '--fusion' "$TMP_DIR/help.txt"
 grep -q -- '--tun' "$TMP_DIR/help.txt"
+grep -q -- '--dagger-local' "$TMP_DIR/help.txt"
 grep -q -- '--realm' "$TMP_DIR/help.txt"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --backhaul >/dev/null
@@ -97,10 +99,12 @@ env "${COMMON_ENV[@]}" \
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --v2quantum >/dev/null
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --fusion >/dev/null
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --tun >/dev/null
+env "${COMMON_ENV[@]}" bash "$LAUNCHER" --dagger-local >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 
 grep -qx 'backhaul' "$LOG"
 grep -qx 'xwsmux' "$LOG"
+grep -qx 'dagger' "$LOG"
 grep -qx 'realm' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:all' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:fusion' "$LOG"
@@ -111,7 +115,8 @@ grep -q 'service test loaded active running' "$TMP_DIR/status.txt"
 grep -q 'v2quantum' "$TMP_DIR/status.txt"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --capabilities >"$TMP_DIR/capabilities.txt"
-grep -q 'Pengu and Dagger licensed binaries are not bundled' "$TMP_DIR/capabilities.txt"
+grep -q 'Pengu and Dagger binaries are not bundled' "$TMP_DIR/capabilities.txt"
+grep -q 'Dagger External/Local' "$TMP_DIR/capabilities.txt"
 grep -q 'quantum_udp is the carrier' "$TMP_DIR/capabilities.txt"
 grep -q 'assigned-IP ICMP scanning' "$TMP_DIR/capabilities.txt"
 grep -q 'separate working L3 TUN' "$TMP_DIR/capabilities.txt"
@@ -127,7 +132,8 @@ test ! -e "$SHORTCUT"
 printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
 grep -q '2) V2Quantum family - TCP / Quantum / Raw / FusionMux / TUN' "$TMP_DIR/menu.txt"
-grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
+grep -q '3) Dagger External/Local - verified user-supplied bundle' "$TMP_DIR/menu.txt"
+grep -q '4) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2
   exit 1
