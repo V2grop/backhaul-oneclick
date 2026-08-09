@@ -13,15 +13,15 @@ cleanup() {
 trap cleanup EXIT
 
 FAKE_BIN="$TMP_DIR/bin"
-FIXTURE="$TMP_DIR/oneclick.sh"
+FIXTURE="$TMP_DIR/oneclick-universal.sh"
 LOG="$TMP_DIR/result.log"
 mkdir -p "$FAKE_BIN"
 
 cat >"$FIXTURE" <<'EOF'
 #!/usr/bin/env bash
-printf '%s|%s|%s|%s\n' \
-  "${V2QUANTUM_REF:-}" "${V2QUANTUM_ALLOW_SOURCE_BUILD:-}" \
-  "${V2QUANTUM_MANAGER_MODE:-}" "$*" >"${FUSION_BOOTSTRAP_TEST_LOG:?}"
+printf '%s|%s|%s\n' \
+  "${TUNNEL_MANAGER_REPO:-}" "${TUNNEL_MANAGER_REF:-}" "$*" \
+  >>"${FUSION_BOOTSTRAP_TEST_LOG:?}"
 EOF
 
 cat >"$FAKE_BIN/curl" <<'EOF'
@@ -44,7 +44,16 @@ FUSION_BOOTSTRAP_TEST_FIXTURE="$FIXTURE" \
 FUSION_BOOTSTRAP_TEST_LOG="$LOG" \
 V2QUANTUM_REPO=V2grop/backhaul-oneclick \
 V2QUANTUM_REF=codex/fusionmux-v1 \
-bash "$BOOTSTRAP" --no-menu
-grep -qx 'codex/fusionmux-v1|1|fusion|--no-menu' "$LOG"
+bash "$BOOTSTRAP"
 
-echo "FusionMux bootstrap tests passed"
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FUSION_BOOTSTRAP_TEST_FIXTURE="$FIXTURE" \
+FUSION_BOOTSTRAP_TEST_LOG="$LOG" \
+TUNNEL_MANAGER_REPO=V2grop/backhaul-oneclick \
+TUNNEL_MANAGER_REF=codex/fusionmux-v1 \
+bash "$BOOTSTRAP" --fusion
+
+grep -qx 'V2grop/backhaul-oneclick|codex/fusionmux-v1|' "$LOG"
+grep -qx 'V2grop/backhaul-oneclick|codex/fusionmux-v1|--fusion' "$LOG"
+
+echo "Unified compatibility bootstrap tests passed"

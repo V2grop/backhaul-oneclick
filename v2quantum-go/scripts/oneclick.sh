@@ -15,7 +15,9 @@ fi
 [[ -n "$OVERRIDE_VERSION" ]] && V2QUANTUM_VERSION="$OVERRIDE_VERSION"
 REPO="${V2QUANTUM_REPO:-V2grop/backhaul-oneclick}"
 REF="${V2QUANTUM_REF:-main}"
-CORE_VERSION="${V2QUANTUM_VERSION:-0.4.0}"
+# A previously installed version must not pin future source updates forever.
+# Only an explicit environment override may replace this installer's version.
+CORE_VERSION="${OVERRIDE_VERSION:-$INSTALLER_VERSION}"
 GO_VERSION="1.26.5"
 ACTION="install"
 OPEN_MENU=true

@@ -185,12 +185,14 @@ select_mode() {
   echo "1) TCP         stable and firewall-friendly" >&2
   echo "2) Quantum v2  adaptive UDP + SACK/FEC (recommended)" >&2
   echo "3) Raw ICMP    experimental spoof/BIP carrier" >&2
-  choice="$(prompt_default "Carrier" "2")"
+  echo "4) FusionMux   Quantum + WebSocket/WSS + TCP automatic failover" >&2
+  choice="$(prompt_default "Transport" "2")"
   case "${choice,,}" in
     1|tcp) printf 'tcp' ;;
     2|quantum|udp|quantum_udp) printf 'quantum_udp' ;;
     3|raw|icmp|raw_icmp) printf 'raw_icmp' ;;
-    *) error "Unknown carrier."; return 1 ;;
+    4|fusion|fusionmux) printf 'fusion' ;;
+    *) error "Unknown transport."; return 1 ;;
   esac
 }
 
@@ -920,12 +922,15 @@ configure_fusion_server() {
 }
 
 configure_fusion_client() {
-  local input token profile target_input health_port instance label_hint ws_tls_bool
+  local input="${1:-}"
+  local token profile target_input health_port instance label_hint ws_tls_bool
   local quantum_endpoint tcp_endpoint
   local targets=()
 
-  printf 'Paste the V2F1_ setup code from Iran: ' >&2
-  IFS= read -r input
+  if [[ -z "$input" ]]; then
+    printf 'Paste the V2F1_ setup code from Iran: ' >&2
+    IFS= read -r input
+  fi
   parse_fusion_setup_code "$input" || { error "Invalid FusionMux setup code."; return 1; }
   token="$FUSION_CODE_TOKEN"
   profile="$FUSION_CODE_PROFILE"
@@ -957,7 +962,11 @@ configure_fusion_client() {
 configure_server() {
 	local mode profile token public_host carrier_port proto public_input public_port health_port raw_json="" setup_code instance label
   local public_ports=()
-  mode="$(select_mode)"
+  mode="$(select_mode)" || return 1
+  if [[ "$mode" == "fusion" ]]; then
+    configure_fusion_server
+    return
+  fi
   profile="$(select_profile)"
   apply_profile "$profile"
   token="$($BIN keygen)"
@@ -1012,9 +1021,12 @@ configure_server() {
 configure_client() {
 	local input mode token server_endpoint profile target_input health_port raw_json="" count instance label_hint
 	local targets=()
-	printf 'Paste Iran setup code (V2Q3_/V2Q2_/V2Q1_...) or a raw PSK: ' >&2
+	printf 'Paste Iran setup code (V2Q3_/V2F1_/V2Q2_/V2Q1_...) or a raw PSK: ' >&2
 	IFS= read -r input
-	if [[ "$input" == V2Q1_* || "$input" == V2Q2_* || "$input" == V2Q3_* ]]; then
+	if [[ "$input" == V2F1_* ]]; then
+    configure_fusion_client "$input"
+    return
+	elif [[ "$input" == V2Q1_* || "$input" == V2Q2_* || "$input" == V2Q3_* ]]; then
 		parse_setup_code "$input" || { error "Invalid setup code."; return 1; }
     token="$CODE_TOKEN"
     mode="$CODE_MODE"
@@ -1322,11 +1334,10 @@ esac
 while true; do
   echo
   echo "================ V2Quantum Manager ================"
-  echo "Recommended"
-  echo "  F) FusionMux Pro - Quantum + WebSocket/WSS + TCP failover"
-  echo "Reverse ports"
-  echo "  1) Iran single-carrier server + V2Q3 setup code"
-  echo "  2) Outside single-carrier server from V2Q setup code"
+  echo "Reverse ports and transports"
+  echo "  1) Iran - create TCP / Quantum / Raw / FusionMux"
+  echo "  2) Outside - import V2Q or V2F setup code"
+  echo "  F) FusionMux Pro dedicated submenu (shortcut)"
   echo "Layer 3"
   echo "  3) L3 TUN manager (independent TCP/Quantum carrier)"
   echo "Instances"
@@ -1341,7 +1352,7 @@ while true; do
   echo " 11) Update core and manager"
   echo " 12) Uninstall V2Quantum program"
   echo "0) Exit"
-  choice="$(prompt_default "Choice" "F")"
+  choice="$(prompt_default "Choice" "1")"
   case "${choice,,}" in
     f|fusion|fusionmux) fusion_menu ;;
     1|iran|server) configure_server || warn "Iran setup was not completed." ;;

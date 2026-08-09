@@ -47,11 +47,18 @@ tunnel-manager --realm
 tunnel-manager --status
 ```
 
-Direct FusionMux installer/menu:
+Compatibility bootstrap for the complete manager (all previous engines remain
+available):
 
 ```bash
 bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/fusionmux-oneclick.sh)
 ```
+
+Add `--fusion` after the command only when the dedicated FusionMux submenu is
+desired. In the normal V2Quantum manager, Iran option `1` now lists TCP,
+Quantum UDP, Raw ICMP and FusionMux as four separate transports; outside option
+`2` accepts both `V2Q...` and `V2F1_...` setup codes. No existing tunnel family
+is removed or merged.
 
 Every new V2Quantum/FusionMux/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second

@@ -118,11 +118,18 @@ bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-onecl
 v2quantum-manager --fusion
 ```
 
-یا مستقیماً نصب و منوی FusionMux را باز کنید:
+لانچر سازگار زیر بدون آرگومان منوی کامل قبلی را باز می‌کند و هیچ گزینه‌ای را
+حذف نمی‌کند:
 
 ```bash
 bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/main/fusionmux-oneclick.sh)
 ```
+
+برای بازکردن مستقیم زیرمنوی FusionMux، `--fusion` را بعد از دستور اضافه کنید.
+در منوی کامل V2Quantum، گزینهٔ ایران سپس Transport شمارهٔ `4` همین FusionMux
+را می‌سازد؛ گزینهٔ خارج نیز کدهای `V2Q...` و `V2F1_...` را خودکار تشخیص می‌دهد.
+TCP، Quantum، Raw ICMP، TUN، Backhaul، XWSMUX Max و Realm همگی سر جای خود باقی
+مانده‌اند.
 
 در ایران گزینهٔ ساخت را انتخاب کنید. مدیر token را خودکار می‌سازد، پورت mapping و سه carrier را می‌پرسد و یک کد `V2F1_` تحویل می‌دهد. در خارج همان منو را باز و فقط کد را Paste کنید؛ مقصد پیش‌فرض `127.0.0.1:2444` است. هر اجرای جدید نام جدا، فایل JSON/ENV جدا، health port جدا و systemd/watchdog جدا دارد و تونل قبلی حذف یا overwrite نمی‌شود.
 

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -89,7 +89,7 @@ capabilities() {
    multiplexing, automatic Iran setup code, reconnect, watchdog,
    health checks, assigned-IP ICMP scanning, and controlled manual
    Raw source/BIP fields. It also provides a separate working L3 TUN
-   over TCP or Quantum UDP with V2T1 setup codes and per-tunnel devices.
+   over TCP or Quantum UDP with V2T2 setup codes and per-tunnel devices.
    quantum_udp is the carrier; user mappings are currently TCP.
 
 4) FusionMux Pro (inside V2Quantum)
@@ -349,7 +349,7 @@ menu() {
     echo "        Universal Tunnel Manager v$SCRIPT_VERSION"
     echo "===================================================="
     echo "1) Backhaul family - Standard / XWSMUX Max / TUN"
-    echo "2) V2Quantum - FusionMux / Quantum / TCP / Raw spoof-BIP"
+    echo "2) V2Quantum family - TCP / Quantum / Raw / FusionMux / TUN"
     echo "3) Realm - TCP/UDP port forwarding"
     echo "4) Unified status and diagnostics"
     echo "5) Install/update tunnel-manager shortcut"

@@ -126,7 +126,7 @@ test ! -e "$SHORTCUT"
 
 printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
-grep -q '2) V2Quantum - FusionMux / Quantum / TCP / Raw spoof-BIP' "$TMP_DIR/menu.txt"
+grep -q '2) V2Quantum family - TCP / Quantum / Raw / FusionMux / TUN' "$TMP_DIR/menu.txt"
 grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2
