@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -13,6 +13,7 @@ XWSMUX_MAX_PINNED_REF="${TUNNEL_MANAGER_XWSMUX_MAX_PINNED_REF:-db3b8b99eb966ddd2
 XWSMUX_MAX_URL="${TUNNEL_MANAGER_XWSMUX_MAX_URL:-${RAW_BASE}/oneclick-xwsmux-max.sh}"
 XWSMUX_MAX_FALLBACK_URL="${TUNNEL_MANAGER_XWSMUX_MAX_FALLBACK_URL:-https://raw.githubusercontent.com/${REPO}/${XWSMUX_MAX_PINNED_REF}/oneclick-xwsmux-max.sh}"
 V2QUANTUM_URL="${TUNNEL_MANAGER_V2QUANTUM_URL:-${RAW_BASE}/v2quantum-oneclick.sh}"
+XHTTP_CDN_URL="${TUNNEL_MANAGER_XHTTP_CDN_URL:-${RAW_BASE}/oneclick-xhttp-cdn.sh}"
 REALM_URL="${TUNNEL_MANAGER_REALM_URL:-https://raw.githubusercontent.com/Sir-Adnan/Realm-Tunnel-Manager/main/realm.sh}"
 SELF_URL="${TUNNEL_MANAGER_SELF_URL:-${RAW_BASE}/oneclick-universal.sh}"
 
@@ -22,6 +23,7 @@ SS_BIN="${TUNNEL_MANAGER_SS:-ss}"
 SHORTCUT="${TUNNEL_MANAGER_SHORTCUT:-/usr/local/sbin/tunnel-manager}"
 REALM_COMMAND="${TUNNEL_MANAGER_REALM_COMMAND:-/usr/local/bin/irealm}"
 V2QUANTUM_MANAGER_COMMAND="${TUNNEL_MANAGER_V2QUANTUM_COMMAND:-/usr/local/sbin/v2quantum-manager}"
+XHTTP_CDN_MANAGER_COMMAND="${TUNNEL_MANAGER_XHTTP_CDN_COMMAND:-/usr/local/sbin/xhttp-cdn-manager}"
 SKIP_ROOT_CHECK="${TUNNEL_MANAGER_SKIP_ROOT_CHECK:-0}"
 ASSUME_YES=false
 ACTION="menu"
@@ -54,6 +56,7 @@ Usage:
   tunnel-manager --xwsmux-max        Optimized XWSMUX/Cloudflare profile
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
   tunnel-manager --tun               Independent encrypted layer-3 TUN manager
+  tunnel-manager --xhttp-cdn         Independent CDN XHTTP/Clean-IP manager
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
   tunnel-manager --capabilities      Show engines and limitations
@@ -93,6 +96,14 @@ capabilities() {
 
 4) Realm Tunnel Manager (external open-source project)
    Optional direct layer-4 TCP/UDP port forwarding.
+
+5) XHTTP CDN (independent official Xray core)
+   Direct TCP port mappings from Iran through Cloudflare XHTTP. The client
+   connects to a user-supplied clean Cloudflare IPv4 while TLS SNI and HTTP
+   Host remain the proxied hostname. It supports automatic Let's Encrypt via
+   a restricted Cloudflare DNS token, automatic self-signed origin TLS, or an
+   existing certificate. It uses isolated files and services and never changes
+   an existing Xray, X-UI, Backhaul or V2Quantum transport.
 
 Pengu and Dagger licensed binaries are not bundled or required by this
 launcher. Raw spoof/BIP works only when both the route and provider policy
@@ -187,6 +198,24 @@ run_xwsmux_max() {
   bash "$script"
 }
 
+run_xhttp_cdn() {
+  local script
+  echo
+  printf '%sXHTTP CDN / Clean-IP manager%s\n' "$cyan" "$reset"
+  echo "Independent Xray core, configs and services; existing transports are preserved."
+  echo
+  if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]]; then
+    "$XHTTP_CDN_MANAGER_COMMAND"
+    return
+  fi
+  script="$(download_script "$XHTTP_CDN_URL" xhttp-cdn)" || return 1
+  env \
+    XHTTP_CDN_REPO="$REPO" \
+    XHTTP_CDN_REF="$REF" \
+    XHTTP_CDN_SELF_URL="$XHTTP_CDN_URL" \
+    bash "$script"
+}
+
 backhaul_menu() {
   local choice
   while true; do
@@ -269,7 +298,7 @@ show_status() {
   echo "================ Tunnel services ================"
   if command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1; then
     "$SYSTEMCTL_BIN" list-units --all --type=service --no-legend --no-pager \
-      'backhaul-*.service' 'v2quantum@*.service' 'realm.service' 2>/dev/null || true
+      'backhaul-*.service' 'v2quantum@*.service' 'xhttp-cdn-*.service' 'realm.service' 2>/dev/null || true
     "$SYSTEMCTL_BIN" list-units --all --type=timer --no-legend --no-pager \
       'backhaul-*.timer' 'v2quantum-watchdog@*.timer' 2>/dev/null || true
   else
@@ -284,6 +313,9 @@ show_status() {
   [[ -x /usr/local/bin/v2quantum ]] \
     && /usr/local/bin/v2quantum version 2>/dev/null \
     || echo "V2Quantum: not installed"
+  [[ -x /opt/xhttp-cdn/bin/xray ]] \
+    && /opt/xhttp-cdn/bin/xray version 2>/dev/null | head -n1 \
+    || echo "XHTTP CDN isolated Xray: not installed"
   [[ -x /usr/local/bin/realm ]] \
     && /usr/local/bin/realm --version 2>/dev/null \
     || echo "Realm: not installed"
@@ -339,9 +371,10 @@ menu() {
     echo "5) Install/update tunnel-manager shortcut"
     echo "6) Remove only the launcher shortcut"
     echo "7) Capabilities and important limitations"
+    echo "8) XHTTP CDN - independent Clean-IP direct forwarder"
     echo "0) Exit"
     echo
-    IFS= read -r -p "Choose [0-7]: " choice
+    IFS= read -r -p "Choose [0-8]: " choice
     case "${choice,,}" in
       1|backhaul) backhaul_menu ;;
       2|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
@@ -350,6 +383,7 @@ menu() {
       5|install|update) install_shortcut; pause_menu ;;
       6|remove|uninstall) remove_shortcut; pause_menu ;;
       7|info|capabilities) capabilities; pause_menu ;;
+      8|xhttp|xhttp-cdn|cdn) run_xhttp_cdn || warn "XHTTP CDN manager exited with an error."; pause_menu ;;
       0|q|quit|exit) exit 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -362,6 +396,7 @@ while (( $# > 0 )); do
     --xwsmux-max) ACTION="xwsmux-max" ;;
     --v2quantum) ACTION="v2quantum" ;;
     --tun) ACTION="tun" ;;
+    --xhttp-cdn) ACTION="xhttp-cdn" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
     --capabilities) ACTION="capabilities" ;;
@@ -383,6 +418,7 @@ case "$ACTION" in
   xwsmux-max) run_xwsmux_max ;;
   v2quantum) run_v2quantum ;;
   tun) run_v2tun ;;
+  xhttp-cdn) run_xhttp_cdn ;;
   realm) run_realm ;;
   status) show_status ;;
   capabilities) capabilities ;;

@@ -21,6 +21,7 @@ duplicate top-level engines:
 | Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX and AnyTLS |
 | XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, 15-second transport watchdog, staged recovery and rollback |
 | V2Quantum | Independent MIT-licensed Go core | TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
+| XHTTP CDN | Isolated official Xray core | Iran-side TCP mappings over Cloudflare XHTTP, clean edge IPv4, automatic origin certificate, TLS SNI/Host, setup code and dedicated Nginx snippet |
 | Realm | External open-source Realm manager | TCP and UDP layer-4 port forwarding |
 
 The launcher itself, V2Quantum and Realm do not use Pengu or Dagger licensed
@@ -42,9 +43,31 @@ tunnel-manager --backhaul
 tunnel-manager --xwsmux-max
 tunnel-manager --v2quantum
 tunnel-manager --tun
+tunnel-manager --xhttp-cdn
 tunnel-manager --realm
 tunnel-manager --status
 ```
+
+The XHTTP CDN option is additive and isolated. It installs its own binary at
+`/opt/xhttp-cdn/bin/xray`, configurations under `/etc/xhttp-cdn`, services named
+`xhttp-cdn-*`, and a dedicated Nginx server block for an unused Cloudflare
+hostname. It does not edit `/etc/xray`, X-UI, Backhaul, V2Quantum, Realm, or an
+existing Nginx server block. On the Iran node the dial address is the selected
+clean Cloudflare IPv4, while TLS SNI and the XHTTP Host remain the proxied
+hostname. The foreign installer offers automatic Let's Encrypt issuance and
+renewal through a locally entered, zone-restricted Cloudflare `Zone:DNS:Edit`
+token; a no-token self-signed option for Cloudflare `Full`; or an existing
+certificate. The token is kept in a root-only file and is not written to Xray
+or Nginx configuration. Only TCP port mappings are advertised by this first
+version.
+
+The XHTTP manager now presents the setup as two explicit guided steps: option
+`1` runs on the foreign server and option `2` runs on the Iran server. Its
+prompts consistently distinguish `FOREIGN_SERVER_IP`, `IRAN_SERVER_IP`, and
+`CLEAN_CLOUDFLARE_IP`, explain mappings as
+`IRAN_PORT=FOREIGN_SERVICE_PORT`, and print the complete connection route after
+installation. Run `xhttp-cdn-manager guide` to display the same quick guide
+without changing any service.
 
 Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second

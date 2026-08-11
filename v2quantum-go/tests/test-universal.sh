@@ -17,7 +17,7 @@ LOG="$TMP_DIR/actions.log"
 SHORTCUT="$TMP_DIR/tunnel-manager"
 mkdir -p "$FIXTURES"
 
-for name in backhaul xwsmux realm; do
+for name in backhaul xwsmux xhttp realm; do
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     "printf '${name}\\n' >>\"\${TUNNEL_TEST_LOG:?}\"" \
@@ -45,6 +45,7 @@ printf '%s\n' \
   '  */missing-xwsmux.sh) exit 22 ;;' \
   '  */oneclick-v3-en.sh) source_file="$TUNNEL_TEST_FIXTURES/backhaul.sh" ;;' \
   '  */oneclick-xwsmux-max.sh) source_file="$TUNNEL_TEST_FIXTURES/xwsmux.sh" ;;' \
+  '  */oneclick-xhttp-cdn.sh) source_file="$TUNNEL_TEST_FIXTURES/xhttp.sh" ;;' \
   '  */v2quantum-oneclick.sh) source_file="$TUNNEL_TEST_FIXTURES/v2quantum.sh" ;;' \
   '  */realm.sh) source_file="$TUNNEL_TEST_FIXTURES/realm.sh" ;;' \
   '  */oneclick-universal.sh) source_file="$TUNNEL_TEST_LAUNCHER" ;;' \
@@ -78,6 +79,7 @@ COMMON_ENV=(
   TUNNEL_MANAGER_SHORTCUT="$SHORTCUT"
   TUNNEL_MANAGER_REALM_COMMAND="$TMP_DIR/missing-irealm"
   TUNNEL_MANAGER_V2QUANTUM_COMMAND="$TMP_DIR/missing-v2quantum-manager"
+  TUNNEL_MANAGER_XHTTP_CDN_COMMAND="$TMP_DIR/missing-xhttp-cdn-manager"
   TUNNEL_TEST_FIXTURES="$FIXTURES"
   TUNNEL_TEST_LAUNCHER="$LAUNCHER"
   TUNNEL_TEST_LOG="$LOG"
@@ -87,6 +89,7 @@ env "${COMMON_ENV[@]}" bash "$LAUNCHER" --help >"$TMP_DIR/help.txt"
 grep -q -- '--xwsmux-max' "$TMP_DIR/help.txt"
 grep -q -- '--v2quantum' "$TMP_DIR/help.txt"
 grep -q -- '--tun' "$TMP_DIR/help.txt"
+grep -q -- '--xhttp-cdn' "$TMP_DIR/help.txt"
 grep -q -- '--realm' "$TMP_DIR/help.txt"
 
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --backhaul >/dev/null
@@ -95,10 +98,12 @@ env "${COMMON_ENV[@]}" \
   bash "$LAUNCHER" --xwsmux-max >/dev/null 2>&1
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --v2quantum >/dev/null
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --tun >/dev/null
+env "${COMMON_ENV[@]}" bash "$LAUNCHER" --xhttp-cdn >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 
 grep -qx 'backhaul' "$LOG"
 grep -qx 'xwsmux' "$LOG"
+grep -qx 'xhttp' "$LOG"
 grep -qx 'realm' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:all' "$LOG"
 grep -qx 'v2quantum:codex/v2quantum-go-v1:1:tun' "$LOG"
@@ -124,6 +129,7 @@ printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
 grep -q '2) V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
 grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
+grep -q '8) XHTTP CDN - independent Clean-IP direct forwarder' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2
   exit 1
