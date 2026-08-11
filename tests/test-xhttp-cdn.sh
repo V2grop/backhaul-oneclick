@@ -61,7 +61,7 @@ validate_cloudflare_token 0123456789abcdef0123456789abcdef01234567 || fail 'Vali
 
 show_server_install_guide >"$TEST_DIR/server-guide.txt"
 grep -Fq 'FOREIGN_SERVER_IP' "$TEST_DIR/server-guide.txt" || fail 'Foreign guide does not label the foreign IP.'
-grep -Fq 'You do NOT enter IRAN_SERVER_IP or CLEAN_CLOUDFLARE_IP in this step.' "$TEST_DIR/server-guide.txt" || fail 'Foreign guide does not prevent IP confusion.'
+grep -Fq 'Enter only CDN_HOSTNAME.' "$TEST_DIR/server-guide.txt" || fail 'Easy foreign guide does not describe its single input.'
 show_client_install_guide >"$TEST_DIR/client-guide.txt"
 grep -Fq 'IRAN_PORT=FOREIGN_SERVICE_PORT' "$TEST_DIR/client-guide.txt" || fail 'Iran guide does not explain the mapping direction.'
 grep -Fq 'Do not enter FOREIGN_SERVER_IP as CLEAN_CLOUDFLARE_IP.' "$TEST_DIR/client-guide.txt" || fail 'Iran guide does not distinguish the clean IP.'
@@ -69,6 +69,17 @@ parse_mappings '2444=443,2083,8443=8443' || fail 'Valid mappings rejected.'
 [[ "${MAPPING_LISTEN_PORTS[*]}" == '2444 2083 8443' ]] || fail 'Listen ports parsed incorrectly.'
 [[ "${MAPPING_TARGET_PORTS[*]}" == '443 2083 8443' ]] || fail 'Target ports parsed incorrectly.'
 ! parse_mappings '2444=443,2444=8443' || fail 'Duplicate local mapping accepted.'
+
+(
+  collect_server_easy_values <<< $'cdn.example.com\n'
+  [[ "$INSTANCE" == cf1 ]] || fail 'Easy foreign setup did not select the default instance.'
+  [[ "$DOMAIN" == cdn.example.com ]] || fail 'Easy foreign setup did not accept the hostname.'
+  [[ "$ORIGIN_PORT" == 18080 ]] || fail 'Easy foreign setup did not select its internal port.'
+  validate_uuid "$UUID" || fail 'Easy foreign setup did not generate a valid UUID.'
+  validate_xhttp_path "$XHTTP_PATH" || fail 'Easy foreign setup did not generate a valid secret path.'
+  [[ "$XHTTP_MODE" == auto ]] || fail 'Easy foreign setup did not select automatic XHTTP mode.'
+  [[ "$CERT_MODE" == self-signed ]] || fail 'Easy foreign setup did not select its zero-input certificate.'
+)
 
 DOMAIN=cdn.example.com
 UUID=123e4567-e89b-12d3-a456-426614174000
@@ -100,6 +111,8 @@ parse_setup_code "$code" || fail 'Generated setup code could not be parsed.'
 
 usage >"$TEST_DIR/usage.txt"
 grep -Fq 'xhttp-cdn-manager easy-client' "$TEST_DIR/usage.txt" || fail 'Easy Iran CLI is missing from help.'
+grep -Fq 'xhttp-cdn-manager iran-command' "$TEST_DIR/usage.txt" || fail 'Iran command recovery is missing from help.'
+grep -Fq 'xhttp-cdn-manager remove' "$TEST_DIR/usage.txt" || fail 'Easy removal is missing from help.'
 
 INSTANCE=cf1
 ORIGIN_PORT=18080
@@ -137,6 +150,59 @@ grep -Fq 'server_name cdn.example.com;' "$TEST_DIR/nginx.conf" || fail 'Nginx ho
 grep -Fq 'location ^~ /xhttp-abcdef123456 {' "$TEST_DIR/nginx.conf" || fail 'Nginx XHTTP path missing.'
 grep -Fq 'grpc_pass grpc://127.0.0.1:18080;' "$TEST_DIR/nginx.conf" || fail 'Nginx loopback upstream mismatch.'
 grep -Fq 'grpc_set_header CF-Connecting-IP $http_cf_connecting_ip;' "$TEST_DIR/nginx.conf" || fail 'Cloudflare client-IP forwarding missing.'
+
+# A command that scrolled off-screen must be rebuildable from an existing
+# foreign JSON/Nginx pair and stored root-only for menu option 2.
+(
+  CONFIG_DIR="$TEST_DIR/recover/config"
+  SYSTEMD_DIR="$TEST_DIR/recover/systemd"
+  NGINX_CONF_DIR="$TEST_DIR/recover/nginx"
+  mkdir -p "$CONFIG_DIR" "$SYSTEMD_DIR" "$NGINX_CONF_DIR"
+  INSTANCE=cf1
+  DOMAIN=cdn.example.com
+  UUID=123e4567-e89b-12d3-a456-426614174000
+  XHTTP_PATH=/xhttp-abcdef123456
+  XHTTP_MODE=auto
+  ORIGIN_PORT=18080
+  TLS_CERT=/etc/ssl/cloudflare/cdn.example.com.pem
+  TLS_KEY=/etc/ssl/cloudflare/cdn.example.com.key
+  service_paths server "$INSTANCE"
+  write_server_config "$CONFIG"
+  write_nginx_config "$NGINX_CONFIG"
+  DOMAIN='' UUID='' XHTTP_PATH='' XHTTP_MODE='' ORIGIN_PORT=''
+  print_iran_easy_command cf1 >"$TEST_DIR/recovered-command.txt"
+  command_file="$(iran_command_file cf1)"
+  [[ -s "$command_file" ]] || fail 'Recovered Iran command was not saved.'
+  [[ "$(stat -c '%a' "$command_file")" == 600 ]] || fail 'Recovered Iran command is not root-only.'
+  grep -Fq ' easy-client' "$command_file" || fail 'Recovered Iran command does not launch easy-client.'
+  grep -Fq 'choose menu option 2' "$TEST_DIR/recovered-command.txt" || fail 'Command recovery instructions are missing.'
+)
+
+# With a single installation, deletion must auto-select it and require no role
+# or instance-name entry. FORCE only skips the yes/no prompt in this test.
+(
+  CONFIG_DIR="$TEST_DIR/remove/config"
+  SYSTEMD_DIR="$TEST_DIR/remove/systemd"
+  NGINX_CONF_DIR="$TEST_DIR/remove/nginx"
+  CERT_DIR="$TEST_DIR/remove/certs"
+  CERTBOT_CREDENTIALS_DIR="$TEST_DIR/remove/certbot"
+  mkdir -p "$CONFIG_DIR" "$SYSTEMD_DIR" "$NGINX_CONF_DIR" "$CERT_DIR" "$CERTBOT_CREDENTIALS_DIR"
+  : >"$CONFIG_DIR/server-cf1.json"
+  : >"$SYSTEMD_DIR/xhttp-cdn-server-cf1.service"
+  : >"$NGINX_CONF_DIR/xhttp-cdn-cf1.conf"
+  : >"$CONFIG_DIR/iran-install-cf1.txt"
+  : >"$CERT_DIR/cf1.crt"
+  : >"$CERT_DIR/cf1.key"
+  : >"$CERTBOT_CREDENTIALS_DIR/cloudflare-cf1.ini"
+  systemctl() { return 0; }
+  nginx() { return 0; }
+  FORCE=true
+  remove_instance_interactive </dev/null
+  [[ ! -e "$CONFIG_DIR/server-cf1.json" ]] || fail 'Easy deletion left the server configuration behind.'
+  [[ ! -e "$SYSTEMD_DIR/xhttp-cdn-server-cf1.service" ]] || fail 'Easy deletion left the service unit behind.'
+  [[ ! -e "$NGINX_CONF_DIR/xhttp-cdn-cf1.conf" ]] || fail 'Easy deletion left the Nginx configuration behind.'
+  [[ ! -e "$CONFIG_DIR/iran-install-cf1.txt" ]] || fail 'Easy deletion left the saved Iran command behind.'
+)
 
 SERVICE_USER=xhttp-cdn
 BIN=/opt/xhttp-cdn/bin/xray

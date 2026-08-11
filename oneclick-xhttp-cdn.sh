@@ -8,7 +8,7 @@ umask 027
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
 # its own Xray binary, JSON configurations, units, and Nginx snippets.
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
 REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-main}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -132,21 +132,14 @@ EOF
 show_server_install_guide() {
   cat <<'EOF'
 ============================================================
-STEP 1 OF 2 - FOREIGN SERVER / مرحله ۱: نصب روی سرور خارج
+EASY FOREIGN INSTALL / نصب آسان روی سرور خارج
 ============================================================
-Run this option only on the FOREIGN server.
+Enter only CDN_HOSTNAME. Example: xhttp.example.com
+UUID, secret path, internal port, XHTTP mode and certificate are automatic.
 
-Before continuing:
-  1. Create a dedicated hostname such as xhttp.example.com.
-  2. Cloudflare A record must point to FOREIGN_SERVER_IP.
-  3. Turn the orange cloud (Proxied) ON and enable Network -> gRPC.
-  4. Allow TCP port 443 on the FOREIGN server.
-
-You do NOT enter IRAN_SERVER_IP or CLEAN_CLOUDFLARE_IP in this step.
-Press Enter for generated/default UUID, path, internal port and XHTTP mode.
+Cloudflare A record: CDN_HOSTNAME -> FOREIGN_SERVER_IP (orange cloud ON)
+Cloudflare SSL mode: Full
 EOF
-  echo
-  show_ip_names
   echo
 }
 
@@ -157,7 +150,7 @@ ADVANCED IRAN INSTALL / نصب دستی و پیشرفتهٔ ایران
 ============================================================
 Run this option only on the IRAN server.
 
-Normally, do not use this menu. Copy the WHOLE easy-install command printed by
+Normally, do not use this advanced command. Copy the WHOLE easy-install command printed by
 the FOREIGN server and paste it on Iran. It asks only the clean IP and mapping.
 
 This manual screen needs:
@@ -177,8 +170,15 @@ EOF
 
 show_simple_guide() {
   show_server_install_guide
-  show_client_install_guide
   cat <<'EOF'
+============================================================
+EASY IRAN INSTALL / نصب آسان روی سرور ایران
+============================================================
+On the FOREIGN server choose menu option 2 and copy the complete command.
+Paste it on the IRAN server. It asks only:
+  1. CLEAN_CLOUDFLARE_IP
+  2. PORT_MAPPING, example: 2444=8444
+
 Simple example / مثال ساده:
   Normal setup    : copy ONE complete command from foreign and paste on Iran
   Iran asks only : CLEAN_CLOUDFLARE_IP and IRAN_PORT=FOREIGN_SERVICE_PORT
@@ -347,6 +347,56 @@ make_iran_easy_command() {
   url="${SELF_URL}${separator}cb=$(date +%s)"
   printf 'XHTTP_CDN_SETUP_CODE=%q XHTTP_CDN_REPO=%q XHTTP_CDN_REF=%q bash <(curl -fsSL --ipv4 %q) easy-client' \
     "$setup_code" "$REPO" "$REF" "$url"
+}
+
+iran_command_file() {
+  local name="$1"
+  printf '%s/iran-install-%s.txt' "$CONFIG_DIR" "$name"
+}
+
+save_iran_easy_command() {
+  local command_file setup_code
+  command_file="$(iran_command_file "$INSTANCE")"
+  setup_code="$(make_setup_code)"
+  mkdir -p "$CONFIG_DIR"
+  make_iran_easy_command "$setup_code" >"$command_file"
+  printf '\n' >>"$command_file"
+  chmod 600 "$command_file"
+}
+
+load_server_pairing_values() {
+  local name="$1" config nginx_config
+  validate_instance "$name" || die "Invalid instance name."
+  service_paths server "$name"
+  config="$CONFIG"
+  nginx_config="$NGINX_CONFIG"
+  [[ -r "$config" ]] || die "Server instance '${name}' has no readable Xray configuration."
+  [[ -r "$nginx_config" ]] || die "Server instance '${name}' has no readable Nginx configuration."
+
+  INSTANCE="$name"
+  DOMAIN="$(awk '$1 == "server_name" {gsub(/;/, "", $2); print $2; exit}' "$nginx_config")"
+  UUID="$(jq -er '.inbounds[0].settings.clients[0].id' "$config")" || die "Could not recover the UUID for '${name}'."
+  XHTTP_PATH="$(jq -er '.inbounds[0].streamSettings.xhttpSettings.path' "$config")" || die "Could not recover the XHTTP path for '${name}'."
+  XHTTP_MODE="$(jq -er '.inbounds[0].streamSettings.xhttpSettings.mode' "$config")" || die "Could not recover the XHTTP mode for '${name}'."
+  ORIGIN_PORT="$(jq -er '.inbounds[0].port' "$config")" || die "Could not recover the internal port for '${name}'."
+
+  validate_domain "$DOMAIN" || die "Could not recover a valid CDN hostname for '${name}'."
+  validate_uuid "$UUID" || die "Recovered UUID for '${name}' is invalid."
+  validate_xhttp_path "$XHTTP_PATH" || die "Recovered XHTTP path for '${name}' is invalid."
+  validate_mode "$XHTTP_MODE" || die "Recovered XHTTP mode for '${name}' is invalid."
+}
+
+print_iran_easy_command() {
+  local name="$1" command_file
+  load_server_pairing_values "$name"
+  save_iran_easy_command
+  command_file="$(iran_command_file "$INSTANCE")"
+  echo
+  printf '%sCOPY THIS ONE COMPLETE COMMAND TO THE IRAN SERVER:%s\n' "$C_BOLD" "$C_RESET"
+  cat "$command_file"
+  echo
+  echo "On Iran it asks only: CLEAN_CLOUDFLARE_IP and PORT_MAPPING."
+  echo "If this screen is lost, choose menu option 2 to show the command again."
 }
 
 parse_setup_code() {
@@ -868,7 +918,7 @@ prepare_install() {
 }
 
 install_server_values() {
-  local temp_config temp_unit temp_nginx previous_nginx setup_code
+  local temp_config temp_unit temp_nginx previous_nginx
   validate_server_request
   service_paths server "$INSTANCE"
   if [[ -e "$CONFIG" || -e "$UNIT" || -e "$NGINX_CONFIG" ]]; then
@@ -916,7 +966,6 @@ install_server_values() {
     die "The XHTTP CDN server service did not become active."
   }
 
-  setup_code="$(make_setup_code)"
   ok "Independent XHTTP CDN endpoint is active."
   echo "Service      : $SERVICE"
   echo "Xray origin  : 127.0.0.1:${ORIGIN_PORT}"
@@ -925,16 +974,8 @@ install_server_values() {
   echo "Certificate  : $CERT_MODE"
   echo "Cloudflare DNS: ${DOMAIN} -> FOREIGN_SERVER_IP (this server, Proxied ON)"
   echo
-  printf '%sEASY IRAN INSTALL - copy this WHOLE command to the IRAN server:%s\n' "$C_BOLD" "$C_RESET"
-  make_iran_easy_command "$setup_code"
-  echo
-  echo
-  echo "The easy command automatically transfers the private settings."
-  echo "On Iran it asks only CLEAN_CLOUDFLARE_IP and the port mapping."
-  echo
-  printf '%sAdvanced/manual setup code only (normally not needed):%s\n%s\n' "$C_BOLD" "$C_RESET" "$setup_code"
-  echo
   cloudflare_checklist
+  print_iran_easy_command "$INSTANCE"
 }
 
 print_client_route_summary() {
@@ -989,7 +1030,24 @@ install_client_values() {
   test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this clean IP is not currently reachable from this server."
 }
 
-collect_server_values() {
+collect_server_easy_values() {
+  INSTANCE="cf1"
+  ORIGIN_PORT="18080"
+  UUID="$(generate_uuid)"
+  XHTTP_PATH="$(generate_path)"
+  XHTTP_MODE="auto"
+  CERT_MODE="self-signed"
+  ACME_EMAIL=""
+  CF_API_TOKEN=""
+  TLS_CERT=""
+  TLS_KEY=""
+
+  prompt_required "[1/1] DOMAIN / دامنه کلودفلر (example: xhttp.example.com)" DOMAIN
+  DOMAIN="${DOMAIN,,}"
+  ok "All private XHTTP settings were generated automatically."
+}
+
+collect_server_advanced_values() {
   local suggested_uuid suggested_path default_cert default_key cert_choice
   prompt_default "[1/6] INSTANCE_NAME (Enter is recommended)" "cf1" INSTANCE
   prompt_required "[2/6] CDN_HOSTNAME (orange-cloud domain, example: xhttp.example.com)" DOMAIN
@@ -1075,8 +1133,15 @@ collect_client_easy_values() {
 
 install_server_interactive() {
   show_server_install_guide
+  collect_server_easy_values
   prepare_install server
-  collect_server_values
+  install_server_values
+}
+
+install_server_advanced_interactive() {
+  show_server_install_guide
+  collect_server_advanced_values
+  prepare_install server
   install_server_values
 }
 
@@ -1118,65 +1183,116 @@ its native XMUX; mux.cool is intentionally not enabled.
 EOF
 }
 
-list_instances() {
-  local file base role name service status found=false
-  printf '%-8s %-32s %-12s %s\n' "ROLE" "INSTANCE" "STATUS" "CONFIG"
+discover_instances() {
+  local filter="${1:-all}" file base role name service status
+  INSTANCE_ROLES=()
+  INSTANCE_NAMES=()
+  INSTANCE_STATUSES=()
   shopt -s nullglob
   for file in "$CONFIG_DIR"/server-*.json "$CONFIG_DIR"/client-*.json; do
-    found=true
     base="$(basename "$file" .json)"
     role="${base%%-*}"
     name="${base#*-}"
+    [[ "$filter" == "all" || "$role" == "$filter" ]] || continue
+    validate_instance "$name" || continue
     service="xhttp-cdn-${role}-${name}"
     status="$(systemctl is-active "$service" 2>/dev/null || true)"
-    printf '%-8s %-32s %-12s %s\n' "$role" "$name" "${status:-unknown}" "$file"
+    INSTANCE_ROLES+=("$role")
+    INSTANCE_NAMES+=("$name")
+    INSTANCE_STATUSES+=("${status:-unknown}")
   done
   shopt -u nullglob
-  [[ "$found" == true ]] || warn "No XHTTP CDN instances found."
 }
 
-instance_action_menu() {
-  local role name action service config nginx_config confirm_text
-  list_instances
-  echo
-  prompt_required "Role (server/client)" role
-  [[ "$role" == "server" || "$role" == "client" ]] || die "Role must be server or client."
-  prompt_required "Instance name" name
-  validate_instance "$name" || die "Invalid instance name."
+list_instances() {
+  local i
+  discover_instances all
+  if ((${#INSTANCE_NAMES[@]} == 0)); then
+    warn "No XHTTP CDN installations found."
+    return 0
+  fi
+  for i in "${!INSTANCE_NAMES[@]}"; do
+    printf '%d) %s / %s / %s\n' "$((i + 1))" \
+      "${INSTANCE_ROLES[$i]}" "${INSTANCE_NAMES[$i]}" "${INSTANCE_STATUSES[$i]}"
+  done
+}
+
+select_instance() {
+  local filter="${1:-all}" choice index i number
+  discover_instances "$filter"
+  if ((${#INSTANCE_NAMES[@]} == 0)); then
+    warn "No matching XHTTP CDN installation was found."
+    return 1
+  fi
+  if ((${#INSTANCE_NAMES[@]} == 1)); then
+    SELECTED_ROLE="${INSTANCE_ROLES[0]}"
+    SELECTED_INSTANCE="${INSTANCE_NAMES[0]}"
+    echo "Selected: ${SELECTED_ROLE} / ${SELECTED_INSTANCE}"
+    return 0
+  fi
+
+  echo "Choose one installation:"
+  for i in "${!INSTANCE_NAMES[@]}"; do
+    printf '%d) %s / %s / %s\n' "$((i + 1))" \
+      "${INSTANCE_ROLES[$i]}" "${INSTANCE_NAMES[$i]}" "${INSTANCE_STATUSES[$i]}"
+  done
+  while true; do
+    IFS= read -r -p "Number [1-${#INSTANCE_NAMES[@]}]: " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+      number=$((10#$choice))
+      if ((number >= 1 && number <= ${#INSTANCE_NAMES[@]})); then
+        index=$((number - 1))
+        SELECTED_ROLE="${INSTANCE_ROLES[$index]}"
+        SELECTED_INSTANCE="${INSTANCE_NAMES[$index]}"
+        return 0
+      fi
+    fi
+    warn "Enter one number from the list."
+  done
+}
+
+show_iran_command_interactive() {
+  local requested="${1:-}"
+  require_root
+  if [[ -n "$requested" ]]; then
+    validate_instance "$requested" || die "Invalid instance name."
+    SELECTED_INSTANCE="$requested"
+  else
+    select_instance server || return 0
+  fi
+  print_iran_easy_command "$SELECTED_INSTANCE"
+}
+
+remove_instance() {
+  local role="$1" name="$2" service config unit nginx_config command_file
   service_paths "$role" "$name"
   service="$SERVICE"
   config="$CONFIG"
+  unit="$UNIT"
   nginx_config="$NGINX_CONFIG"
-  [[ -e "$config" || -e "$UNIT" ]] || die "Instance not found."
-  echo "1) Status"
-  echo "2) Restart"
-  echo "3) Recent logs"
-  echo "4) Show configuration"
-  echo "5) Remove this XHTTP CDN instance"
-  echo "0) Back"
-  IFS= read -r -p "Action [0-5]: " action
-  case "$action" in
-    1) systemctl --no-pager --full status "$service" || true ;;
-    2) systemctl restart "$service"; systemctl --no-pager --full status "$service" || true ;;
-    3) journalctl -u "$service" -n 120 --no-pager -o cat || true ;;
-    4) jq . "$config" ;;
-    5)
-      confirm_text="REMOVE-${name}"
-      IFS= read -r -p "Type ${confirm_text} to remove only this XHTTP instance: " action
-      [[ "$action" == "$confirm_text" ]] || { echo "Cancelled."; return 0; }
-      systemctl disable --now "$service" 2>/dev/null || true
-      rm -f -- "$UNIT" "$config"
-      if [[ "$role" == "server" && -n "$nginx_config" ]]; then
-        rm -f -- "$nginx_config"
-        nginx -t && systemctl reload nginx || true
-      fi
-      systemctl daemon-reload
-      systemctl reset-failed "$service" 2>/dev/null || true
-      ok "Removed only ${service}; other tunnel engines and configs were untouched."
-      ;;
-    0) return 0 ;;
-    *) warn "Invalid action." ;;
-  esac
+  command_file="$(iran_command_file "$name")"
+
+  systemctl disable --now "$service" 2>/dev/null || true
+  rm -f -- "$unit" "$config"
+  if [[ "$role" == "server" ]]; then
+    rm -f -- "$nginx_config" "$command_file" \
+      "${CERT_DIR}/${name}.crt" "${CERT_DIR}/${name}.key" \
+      "${CERTBOT_CREDENTIALS_DIR}/cloudflare-${name}.ini"
+    nginx -t && systemctl reload nginx || true
+  fi
+  systemctl daemon-reload
+  systemctl reset-failed "$service" 2>/dev/null || true
+  ok "Removed ${role} / ${name}. Other tunnel transports were untouched."
+}
+
+remove_instance_interactive() {
+  require_root
+  select_instance all || return 0
+  confirm "Delete ${SELECTED_ROLE} / ${SELECTED_INSTANCE}?" || {
+    echo "Cancelled."
+    return 0
+  }
+  remove_instance "$SELECTED_ROLE" "$SELECTED_INSTANCE"
 }
 
 update_core() {
@@ -1191,11 +1307,13 @@ update_core() {
 }
 
 update_manager() {
-  local temp
+  local temp url separator='?'
   require_root
   ensure_tmp_dir
   temp="${TMP_DIR}/oneclick-xhttp-cdn.sh"
-  curl -fL --ipv4 --retry 3 --connect-timeout 15 -o "$temp" "$SELF_URL"
+  [[ "$SELF_URL" == *\?* ]] && separator='&'
+  url="${SELF_URL}${separator}cb=$(date +%s)"
+  curl -fL --ipv4 --retry 3 --connect-timeout 15 -o "$temp" "$url"
   bash -n "$temp" || die "Downloaded manager failed the shell syntax check."
   install -o root -g root -m 755 "$temp" "$SELF_PATH"
   ok "Manager updated: $SELF_PATH"
@@ -1211,21 +1329,23 @@ main_menu() {
   while true; do
     clear 2>/dev/null || true
     logo
-    echo "1) STEP 1 - Install on FOREIGN server (سرور خارج)"
-    echo "2) ADVANCED/manual install on IRAN server (uses XHC1 code)"
-    echo "3) List/manage XHTTP CDN instances"
-    echo "4) Test CLEAN_CLOUDFLARE_IP from this IRAN server"
-    echo "5) Update only the isolated Xray core"
-    echo "6) Update this XHTTP CDN manager"
-    echo "7) Show EASY step-by-step guide"
+    echo "1) EASY install on FOREIGN server (asks only domain)"
+    echo "2) Show/copy the IRAN install command"
+    echo "3) Delete an XHTTP CDN installation"
+    echo "4) Show status"
+    echo "5) Test CLEAN_CLOUDFLARE_IP on the IRAN server"
+    echo "6) Update the isolated Xray core"
+    echo "7) Update this XHTTP CDN manager"
+    echo "8) Show the simple guide"
     echo "0) Return/exit"
     echo
-    IFS= read -r -p "Choose [0-7]: " choice
+    IFS= read -r -p "Choose [0-8]: " choice
     case "$choice" in
       1) install_server_interactive; pause_menu ;;
-      2) install_client_interactive; pause_menu ;;
-      3) instance_action_menu; pause_menu ;;
-      4)
+      2) show_iran_command_interactive; pause_menu ;;
+      3) remove_instance_interactive; pause_menu ;;
+      4) list_instances; pause_menu ;;
+      5)
         ensure_dependencies client
         echo "Run this test on the IRAN server."
         prompt_required "CDN_HOSTNAME (example: xhttp.example.com)" domain
@@ -1233,9 +1353,9 @@ main_menu() {
         test_clean_ip "${domain,,}" "$ip" || true
         pause_menu
         ;;
-      5) update_core; pause_menu ;;
-      6) update_manager; pause_menu ;;
-      7) show_simple_guide; echo; cloudflare_checklist; pause_menu ;;
+      6) update_core; pause_menu ;;
+      7) update_manager; pause_menu ;;
+      8) show_simple_guide; echo; cloudflare_checklist; pause_menu ;;
       0|q|quit|exit) return 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -1249,11 +1369,15 @@ Independent XHTTP CDN Manager ${SCRIPT_VERSION}
 Usage:
   xhttp-cdn-manager                 Open interactive menu
   xhttp-cdn-manager status          List only XHTTP CDN instances
+  xhttp-cdn-manager iran-command    Show the saved/rebuilt Iran command
+  xhttp-cdn-manager remove          Delete one installation with a numbered choice
   xhttp-cdn-manager test-edge DOMAIN CLEAN_IP
   xhttp-cdn-manager update-core     Update only ${BIN}
   xhttp-cdn-manager checklist       Show Cloudflare requirements
   xhttp-cdn-manager guide           Show the easy two-step setup guide
   xhttp-cdn-manager easy-client     Automatic Iran install from the foreign command
+  xhttp-cdn-manager advanced-server Show all optional foreign settings
+  xhttp-cdn-manager advanced-client Manual Iran install with an XHC1 code
   xhttp-cdn-manager --version
 
 The interactive installer creates a foreign XHTTP endpoint or an Iran-side
@@ -1269,6 +1393,8 @@ main() {
   case "$command" in
     menu) require_root; main_menu ;;
     status) require_root; list_instances ;;
+    iran-command) [[ $# -le 2 ]] || { usage >&2; exit 2; }; show_iran_command_interactive "${2:-}" ;;
+    remove) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; remove_instance_interactive ;;
     test-edge)
       [[ $# -eq 3 ]] || { usage >&2; exit 2; }
       ensure_dependencies client
@@ -1277,6 +1403,8 @@ main() {
     update-core) update_core ;;
     checklist) cloudflare_checklist ;;
     guide) show_simple_guide; echo; cloudflare_checklist ;;
+    advanced-server) install_server_advanced_interactive ;;
+    advanced-client) install_client_interactive ;;
     easy-client|--easy-client)
       [[ $# -le 2 ]] || die "Use the complete automatic command printed by the foreign server."
       setup_code="${2:-${XHTTP_CDN_SETUP_CODE:-}}"

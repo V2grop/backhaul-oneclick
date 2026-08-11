@@ -54,27 +54,24 @@ The XHTTP CDN option is additive and isolated. It installs its own binary at
 hostname. It does not edit `/etc/xray`, X-UI, Backhaul, V2Quantum, Realm, or an
 existing Nginx server block. On the Iran node the dial address is the selected
 clean Cloudflare IPv4, while TLS SNI and the XHTTP Host remain the proxied
-hostname. The foreign installer offers automatic Let's Encrypt issuance and
-renewal through a locally entered, zone-restricted Cloudflare `Zone:DNS:Edit`
-token; a no-token self-signed option for Cloudflare `Full`; or an existing
-certificate. The token is kept in a root-only file and is not written to Xray
-or Nginx configuration. Only TCP port mappings are advertised by this first
-version.
+hostname. The normal foreign installer asks only for that hostname and creates
+the UUID, secret path, internal port, XHTTP mode, and a self-signed origin
+certificate automatically for Cloudflare `Full`. Optional Let's Encrypt and
+existing-certificate choices remain available through `advanced-server`.
+Only TCP port mappings are advertised by this first version.
 
-The XHTTP manager now presents the setup as two explicit guided steps: option
-`1` runs on the foreign server and option `2` runs on the Iran server. Its
-prompts consistently distinguish `FOREIGN_SERVER_IP`, `IRAN_SERVER_IP`, and
-`CLEAN_CLOUDFLARE_IP`, explain mappings as
-`IRAN_PORT=FOREIGN_SERVICE_PORT`, and print the complete connection route after
-installation. Run `xhttp-cdn-manager guide` to display the same quick guide
-without changing any service.
+The simple menu uses option `1` for the one-question foreign installation,
+option `2` to show the Iran command again, and option `3` for numbered deletion
+with one confirmation. It does not ask users to type a role, instance name,
+UUID, path, internal port, or XHC1 code during the normal workflow.
 
 For the normal Iran installation, manual setup-code entry is no longer needed.
 After the foreign endpoint starts, it prints one complete cache-busted command.
 Paste that whole command on the Iran server; the automatic workflow transfers
 the private XHTTP settings internally and asks only for
-`CLEAN_CLOUDFLARE_IP` and `IRAN_PORT=FOREIGN_SERVICE_PORT`. Menu option `2`
-remains available only as an advanced/manual fallback.
+`CLEAN_CLOUDFLARE_IP` and `IRAN_PORT=FOREIGN_SERVICE_PORT`. The command is also
+saved root-only and can always be rebuilt from the installed configuration by
+choosing menu option `2` or running `xhttp-cdn-manager iran-command`.
 
 Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second
