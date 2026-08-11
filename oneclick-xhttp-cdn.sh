@@ -8,7 +8,7 @@ umask 027
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
 # its own Xray binary, JSON configurations, units, and Nginx snippets.
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
 REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-main}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -495,6 +495,19 @@ ensure_service_user() {
     --shell /usr/sbin/nologin "$SERVICE_USER"
 }
 
+ensure_xray_runtime_access() {
+  local directory
+  # umask 027 intentionally protects generated configuration, but it also
+  # makes freshly-created program directories 0750/root:root. The dedicated
+  # systemd user must be able to traverse these two non-secret directories in
+  # order to execute Xray. Configuration remains protected under /etc.
+  for directory in "$BASE_DIR" "$BIN_DIR"; do
+    [[ -d "$directory" ]] || continue
+    chmod 755 "$directory"
+  done
+  [[ ! -f "$BIN" ]] || chmod 755 "$BIN"
+}
+
 download_xray() {
   local asset release_base archive digest expected actual extracted
   asset="$(architecture_asset)"
@@ -517,12 +530,16 @@ download_xray() {
   chmod 755 "$extracted"
   "$extracted" version >/dev/null 2>&1 || die "The downloaded Xray binary cannot run."
   mkdir -p "$BIN_DIR"
+  ensure_xray_runtime_access
   install -o root -g root -m 755 "$extracted" "${BIN}.new"
   mv -f -- "${BIN}.new" "$BIN"
+  ensure_xray_runtime_access
   ok "Isolated Xray installed: $BIN"
 }
 
 ensure_xray() {
+  # Repair installations made by v1.1.0 before testing/reusing the binary.
+  ensure_xray_runtime_access
   if [[ -x "$BIN" ]] && "$BIN" version 2>/dev/null | grep -Fq "${XRAY_VERSION#v}"; then
     return 0
   fi

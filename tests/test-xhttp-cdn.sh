@@ -25,6 +25,23 @@ assert_jq() {
 bash -n "$MANAGER"
 source "$MANAGER"
 
+# With the manager's umask 027, fresh program directories start as 0750 and a
+# root-owned path cannot be traversed by the xhttp-cdn service user. The repair
+# helper must make only the isolated runtime path executable while configs stay
+# protected separately under CONFIG_DIR.
+(
+  BASE_DIR="$TEST_DIR/runtime/opt/xhttp-cdn"
+  BIN_DIR="$BASE_DIR/bin"
+  BIN="$BIN_DIR/xray"
+  mkdir -p "$BIN_DIR"
+  : >"$BIN"
+  chmod 750 "$BASE_DIR" "$BIN_DIR" "$BIN"
+  ensure_xray_runtime_access
+  [[ "$(stat -c '%a' "$BASE_DIR")" == 755 ]] || fail 'Xray base directory is not service-traversable.'
+  [[ "$(stat -c '%a' "$BIN_DIR")" == 755 ]] || fail 'Xray binary directory is not service-traversable.'
+  [[ "$(stat -c '%a' "$BIN")" == 755 ]] || fail 'Xray binary is not executable by the service user.'
+)
+
 validate_instance cf1 || fail 'Valid instance name rejected.'
 ! validate_instance '../cf1' || fail 'Unsafe instance name accepted.'
 validate_domain cdn.example.com || fail 'Valid domain rejected.'
