@@ -76,6 +76,11 @@ XHTTP_PATH=/xhttp-abcdef123456
 XHTTP_MODE=auto
 code="$(make_setup_code)"
 [[ "$code" == XHC1_* ]] || fail 'Setup code prefix is missing.'
+easy_command="$(make_iran_easy_command "$code")"
+[[ "$easy_command" == *'XHTTP_CDN_SETUP_CODE=XHC1_'* ]] || fail 'Easy Iran command does not carry the private setup data.'
+[[ "$easy_command" == *' easy-client' ]] || fail 'Easy Iran command does not launch the automatic client workflow.'
+[[ "$easy_command" == *'oneclick-xhttp-cdn.sh'*'?cb='* ]] || fail 'Easy Iran command does not bypass stale Raw GitHub cache.'
+bash -n <<<"$easy_command" || fail 'Generated easy Iran command is not valid Bash.'
 DOMAIN='' UUID='' XHTTP_PATH='' XHTTP_MODE='' EDGE_PORT=''
 parse_setup_code "$code" || fail 'Generated setup code could not be parsed.'
 [[ "$DOMAIN" == cdn.example.com ]] || fail 'Setup code domain mismatch.'
@@ -83,6 +88,18 @@ parse_setup_code "$code" || fail 'Generated setup code could not be parsed.'
 [[ "$XHTTP_PATH" == /xhttp-abcdef123456 ]] || fail 'Setup code path mismatch.'
 [[ "$EDGE_PORT" == 443 && "$XHTTP_MODE" == auto ]] || fail 'Setup code transport mismatch.'
 ! parse_setup_code 'XHC1_broken' || fail 'Damaged setup code accepted.'
+
+(
+  collect_client_easy_values "$code" <<< $'104.16.1.1\n2444=8444,2083=2083\n'
+  [[ "$INSTANCE" == cf1 ]] || fail 'Easy Iran workflow did not select the default instance.'
+  [[ "$CLEAN_IP" == 104.16.1.1 ]] || fail 'Easy Iran workflow did not accept the clean IP.'
+  [[ "$BIND_ADDRESS" == 0.0.0.0 ]] || fail 'Easy Iran workflow did not use the public bind default.'
+  [[ "$TARGET_HOST" == 127.0.0.1 ]] || fail 'Easy Iran workflow did not use the foreign loopback target.'
+  [[ "${MAPPING_ITEMS[*]}" == '2444=8444 2083=2083' ]] || fail 'Easy Iran workflow parsed mappings incorrectly.'
+)
+
+usage >"$TEST_DIR/usage.txt"
+grep -Fq 'xhttp-cdn-manager easy-client' "$TEST_DIR/usage.txt" || fail 'Easy Iran CLI is missing from help.'
 
 INSTANCE=cf1
 ORIGIN_PORT=18080

@@ -8,7 +8,7 @@ umask 027
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
 # its own Xray binary, JSON configurations, units, and Nginx snippets.
 
-SCRIPT_VERSION="1.1.1"
+SCRIPT_VERSION="1.2.0"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
 REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-main}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -153,11 +153,14 @@ EOF
 show_client_install_guide() {
   cat <<'EOF'
 ============================================================
-STEP 2 OF 2 - IRAN SERVER / مرحله ۲: نصب روی سرور ایران
+ADVANCED IRAN INSTALL / نصب دستی و پیشرفتهٔ ایران
 ============================================================
 Run this option only on the IRAN server.
 
-You need only:
+Normally, do not use this menu. Copy the WHOLE easy-install command printed by
+the FOREIGN server and paste it on Iran. It asks only the clean IP and mapping.
+
+This manual screen needs:
   1. XHC1_SETUP_CODE copied from the FOREIGN server.
   2. CLEAN_CLOUDFLARE_IP reachable from this IRAN server.
   3. Port mapping in this exact format:
@@ -177,6 +180,8 @@ show_simple_guide() {
   show_client_install_guide
   cat <<'EOF'
 Simple example / مثال ساده:
+  Normal setup    : copy ONE complete command from foreign and paste on Iran
+  Iran asks only : CLEAN_CLOUDFLARE_IP and IRAN_PORT=FOREIGN_SERVICE_PORT
   Cloudflare DNS : xhttp.example.com -> FOREIGN_SERVER_IP (orange cloud ON)
   Iran mapping   : 2444=8444
   User connects  : IRAN_SERVER_IP:2444
@@ -334,6 +339,14 @@ make_setup_code() {
   local payload
   payload="1|${DOMAIN}|${UUID}|${XHTTP_PATH}|443|${XHTTP_MODE}"
   printf 'XHC1_%s' "$(printf '%s' "$payload" | base64url_encode)"
+}
+
+make_iran_easy_command() {
+  local setup_code="$1" url separator='?'
+  [[ "$SELF_URL" == *\?* ]] && separator='&'
+  url="${SELF_URL}${separator}cb=$(date +%s)"
+  printf 'XHTTP_CDN_SETUP_CODE=%q XHTTP_CDN_REPO=%q XHTTP_CDN_REF=%q bash <(curl -fsSL --ipv4 %q) easy-client' \
+    "$setup_code" "$REPO" "$REF" "$url"
 }
 
 parse_setup_code() {
@@ -912,7 +925,14 @@ install_server_values() {
   echo "Certificate  : $CERT_MODE"
   echo "Cloudflare DNS: ${DOMAIN} -> FOREIGN_SERVER_IP (this server, Proxied ON)"
   echo
-  printf '%sXHC1_SETUP_CODE for the IRAN server (keep it private):%s\n%s\n' "$C_BOLD" "$C_RESET" "$setup_code"
+  printf '%sEASY IRAN INSTALL - copy this WHOLE command to the IRAN server:%s\n' "$C_BOLD" "$C_RESET"
+  make_iran_easy_command "$setup_code"
+  echo
+  echo
+  echo "The easy command automatically transfers the private settings."
+  echo "On Iran it asks only CLEAN_CLOUDFLARE_IP and the port mapping."
+  echo
+  printf '%sAdvanced/manual setup code only (normally not needed):%s\n%s\n' "$C_BOLD" "$C_RESET" "$setup_code"
   echo
   cloudflare_checklist
 }
@@ -1036,6 +1056,23 @@ collect_client_values() {
   parse_mappings "$mappings" || die "Invalid mappings. Use IRAN_PORT=FOREIGN_SERVICE_PORT, separated by commas."
 }
 
+collect_client_easy_values() {
+  local setup_code="$1" mappings
+  [[ -n "$setup_code" ]] || die "The automatic Iran command is missing its private pairing data."
+  parse_setup_code "$setup_code" || die "The automatic Iran command is invalid or damaged. Copy the whole command again."
+  INSTANCE="cf1"
+  BIND_ADDRESS="0.0.0.0"
+  TARGET_HOST="127.0.0.1"
+
+  ok "Foreign settings received automatically; no setup code entry is needed."
+  prompt_required "[1/2] CLEAN_CLOUDFLARE_IP (not Iran IP, not foreign IP)" CLEAN_IP
+  echo
+  echo "Port mapping: IRAN_PORT=FOREIGN_SERVICE_PORT"
+  echo "Example: 2444=8444"
+  prompt_required "[2/2] PORT_MAPPING" mappings
+  parse_mappings "$mappings" || die "Invalid mapping. Example: 2444=8444 or 2444=8444,2083=2083."
+}
+
 install_server_interactive() {
   show_server_install_guide
   prepare_install server
@@ -1047,6 +1084,18 @@ install_client_interactive() {
   show_client_install_guide
   prepare_install client
   collect_client_values
+  install_client_values
+}
+
+install_client_easy_interactive() {
+  local setup_code="$1"
+  require_root
+  logo
+  echo "EASY IRAN INSTALL / نصب آسان ایران"
+  echo "Private foreign settings are already inside the copied command."
+  echo
+  collect_client_easy_values "$setup_code"
+  prepare_install client
   install_client_values
 }
 
@@ -1163,7 +1212,7 @@ main_menu() {
     clear 2>/dev/null || true
     logo
     echo "1) STEP 1 - Install on FOREIGN server (سرور خارج)"
-    echo "2) STEP 2 - Install on IRAN server (سرور ایران)"
+    echo "2) ADVANCED/manual install on IRAN server (uses XHC1 code)"
     echo "3) List/manage XHTTP CDN instances"
     echo "4) Test CLEAN_CLOUDFLARE_IP from this IRAN server"
     echo "5) Update only the isolated Xray core"
@@ -1204,6 +1253,7 @@ Usage:
   xhttp-cdn-manager update-core     Update only ${BIN}
   xhttp-cdn-manager checklist       Show Cloudflare requirements
   xhttp-cdn-manager guide           Show the easy two-step setup guide
+  xhttp-cdn-manager easy-client     Automatic Iran install from the foreign command
   xhttp-cdn-manager --version
 
 The interactive installer creates a foreign XHTTP endpoint or an Iran-side
@@ -1215,7 +1265,7 @@ EOF
 }
 
 main() {
-  local command="${1:-menu}"
+  local command="${1:-menu}" setup_code
   case "$command" in
     menu) require_root; main_menu ;;
     status) require_root; list_instances ;;
@@ -1227,6 +1277,11 @@ main() {
     update-core) update_core ;;
     checklist) cloudflare_checklist ;;
     guide) show_simple_guide; echo; cloudflare_checklist ;;
+    easy-client|--easy-client)
+      [[ $# -le 2 ]] || die "Use the complete automatic command printed by the foreign server."
+      setup_code="${2:-${XHTTP_CDN_SETUP_CODE:-}}"
+      install_client_easy_interactive "$setup_code"
+      ;;
     -h|--help|help) usage ;;
     --version|version) echo "xhttp-cdn-manager ${SCRIPT_VERSION}" ;;
     *) usage >&2; exit 2 ;;

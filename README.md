@@ -69,6 +69,13 @@ prompts consistently distinguish `FOREIGN_SERVER_IP`, `IRAN_SERVER_IP`, and
 installation. Run `xhttp-cdn-manager guide` to display the same quick guide
 without changing any service.
 
+For the normal Iran installation, manual setup-code entry is no longer needed.
+After the foreign endpoint starts, it prints one complete cache-busted command.
+Paste that whole command on the Iran server; the automatic workflow transfers
+the private XHTTP settings internally and asks only for
+`CLEAN_CLOUDFLARE_IP` and `IRAN_PORT=FOREIGN_SERVICE_PORT`. Menu option `2`
+remains available only as an advanced/manual fallback.
+
 Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second
 tunnel therefore does not replace the first one. Setup codes use `V2Q3_` for
