@@ -14,6 +14,8 @@ BIN="${1:-$PROJECT_DIR/bin/v2quantum}"
 MANAGER="$PROJECT_DIR/scripts/manager.sh"
 TMP_DIR="$(mktemp -d -t v2quantum-manager-test.XXXXXX)"
 
+"$MANAGER" --version | grep -qx 'v2quantum-manager 0.3.1'
+
 cleanup() {
   if [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" && "$TMP_DIR" == /tmp/v2quantum-manager-test.* ]]; then
     rm -rf -- "$TMP_DIR"

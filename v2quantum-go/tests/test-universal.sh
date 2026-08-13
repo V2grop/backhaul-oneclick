@@ -98,6 +98,46 @@ env "${COMMON_ENV[@]}" \
   bash "$LAUNCHER" --xwsmux-max >/dev/null 2>&1
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --v2quantum >/dev/null
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --tun >/dev/null
+
+# An already-current manager opens directly without downloading/building again.
+CURRENT_MANAGER="$TMP_DIR/current-v2quantum-manager"
+cat >"$CURRENT_MANAGER" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "v2quantum-manager 0.3.1"
+  exit 0
+fi
+printf 'current-manager:%s\n' "${1:-all}" >>"${TUNNEL_TEST_LOG:?}"
+EOF
+chmod 755 "$CURRENT_MANAGER"
+updater_count_before="$(grep -c '^v2quantum:' "$LOG")"
+env "${COMMON_ENV[@]}" TUNNEL_MANAGER_V2QUANTUM_COMMAND="$CURRENT_MANAGER" \
+  bash "$LAUNCHER" --tun >/dev/null
+updater_count_after="$(grep -c '^v2quantum:' "$LOG")"
+test "$updater_count_after" -eq "$updater_count_before"
+grep -qx 'current-manager:--tun' "$LOG"
+
+# An old installed manager must run the selected-ref updater instead of opening stale code.
+OUTDATED_MANAGER="$TMP_DIR/outdated-v2quantum-manager"
+cat >"$OUTDATED_MANAGER" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "v2quantum-manager 0.3.0"
+  exit 0
+fi
+echo 'outdated-manager-was-opened' >>"${TUNNEL_TEST_LOG:?}"
+EOF
+chmod 755 "$OUTDATED_MANAGER"
+updater_count_before="$(grep -c '^v2quantum:' "$LOG")"
+env "${COMMON_ENV[@]}" TUNNEL_MANAGER_V2QUANTUM_COMMAND="$OUTDATED_MANAGER" \
+  bash "$LAUNCHER" --tun >/dev/null
+updater_count_after="$(grep -c '^v2quantum:' "$LOG")"
+test "$updater_count_after" -eq "$((updater_count_before + 1))"
+if grep -q '^outdated-manager-was-opened$' "$LOG"; then
+  echo "the launcher opened an outdated V2Quantum manager" >&2
+  exit 1
+fi
+
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --xhttp-cdn >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 

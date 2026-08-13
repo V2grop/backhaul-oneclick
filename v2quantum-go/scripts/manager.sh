@@ -2,6 +2,12 @@
 set -Eeuo pipefail
 umask 027
 
+MANAGER_VERSION="0.3.1"
+if [[ "${1:-}" == "--version" ]]; then
+  echo "v2quantum-manager $MANAGER_VERSION"
+  exit 0
+fi
+
 BIN="${V2QUANTUM_BIN:-/usr/local/bin/v2quantum}"
 INSTALLER="${V2QUANTUM_INSTALLER:-/usr/local/sbin/v2quantum-installer}"
 CONFIG_DIR="${V2QUANTUM_CONFIG_DIR:-/etc/v2quantum}"

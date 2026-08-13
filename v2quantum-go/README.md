@@ -89,6 +89,12 @@ bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-onecl
 
 ## TUN مستقل لایهٔ ۳
 
+نصب یا آپدیت نهایی و کوتاه روی هر دو سرور ایران و خارج:
+
+```bash
+curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/install-v2tun.sh | bash
+```
+
 از منوی عمومی گزینهٔ `V2TUN` یا دستور زیر استفاده کنید:
 
 ```bash

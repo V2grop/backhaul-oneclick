@@ -3,7 +3,8 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
+V2QUANTUM_MANAGER_REVISION="0.3.1"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -251,13 +252,19 @@ run_v2quantum() {
   fi
   echo "This engine has no Pengu/Dagger/Backhaul license dependency."
   echo
-  if [[ -x "$V2QUANTUM_MANAGER_COMMAND" ]]; then
+  if [[ -x "$V2QUANTUM_MANAGER_COMMAND" ]] && \
+     [[ "$("$V2QUANTUM_MANAGER_COMMAND" --version 2>/dev/null || true)" == \
+        "v2quantum-manager $V2QUANTUM_MANAGER_REVISION" ]]; then
     if [[ "$manager_mode" == "tun" ]]; then
       "$V2QUANTUM_MANAGER_COMMAND" --tun
     else
       "$V2QUANTUM_MANAGER_COMMAND"
     fi
     return
+  fi
+
+  if [[ -x "$V2QUANTUM_MANAGER_COMMAND" ]]; then
+    warn "Installed V2Quantum manager is outdated; updating it from $REF first."
   fi
 
   local script allow_source
