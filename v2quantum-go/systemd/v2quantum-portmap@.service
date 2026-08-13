@@ -1,0 +1,28 @@
+[Unit]
+Description=V2Quantum TUN TCP port forward (%i)
+Documentation=https://github.com/V2grop/backhaul-oneclick
+Requires=v2quantum@%i.service
+After=v2quantum@%i.service ufw.service firewalld.service
+PartOf=v2quantum@%i.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/v2quantum-portmap apply %i
+ExecStop=/usr/local/libexec/v2quantum-portmap remove %i
+TimeoutStartSec=20s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+# iptables uses /run/xtables.lock; "full" keeps /usr and /etc read-only while
+# leaving the runtime lock directory writable.
+ProtectSystem=full
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

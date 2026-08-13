@@ -298,7 +298,8 @@ show_status() {
   echo "================ Tunnel services ================"
   if command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1; then
     "$SYSTEMCTL_BIN" list-units --all --type=service --no-legend --no-pager \
-      'backhaul-*.service' 'v2quantum@*.service' 'xhttp-cdn-*.service' 'realm.service' 2>/dev/null || true
+      'backhaul-*.service' 'v2quantum@*.service' 'v2quantum-portmap@*.service' \
+      'xhttp-cdn-*.service' 'realm.service' 2>/dev/null || true
     "$SYSTEMCTL_BIN" list-units --all --type=timer --no-legend --no-pager \
       'backhaul-*.timer' 'v2quantum-watchdog@*.timer' 2>/dev/null || true
   else

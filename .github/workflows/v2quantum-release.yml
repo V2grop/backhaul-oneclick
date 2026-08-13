@@ -42,7 +42,9 @@ jobs:
             dist/v2quantum-manager \
             dist/v2quantum-installer \
             dist/v2quantum-watchdog \
+            dist/v2quantum-portmap \
             dist/v2quantum@.service \
+            dist/v2quantum-portmap@.service \
             dist/v2quantum-watchdog@.service \
             dist/v2quantum-watchdog@.timer \
             dist/SHA256SUMS \

@@ -28,7 +28,9 @@ INSTALL_BIN="$ROOT/usr/local/bin/v2quantum"
 INSTALL_MANAGER="$ROOT/usr/local/sbin/v2quantum-manager"
 INSTALLER_PATH="$ROOT/usr/local/sbin/v2quantum-installer"
 INSTALL_WATCHDOG="$ROOT/usr/local/libexec/v2quantum-watchdog"
+INSTALL_PORTMAP="$ROOT/usr/local/libexec/v2quantum-portmap"
 INSTALL_UNIT="$ROOT/etc/systemd/system/v2quantum@.service"
+INSTALL_PORTMAP_UNIT="$ROOT/etc/systemd/system/v2quantum-portmap@.service"
 INSTALL_WATCHDOG_UNIT="$ROOT/etc/systemd/system/v2quantum-watchdog@.service"
 INSTALL_WATCHDOG_TIMER="$ROOT/etc/systemd/system/v2quantum-watchdog@.timer"
 CONFIG_DIR="$ROOT/etc/v2quantum"
@@ -59,7 +61,9 @@ env \
   V2QUANTUM_INSTALL_MANAGER="$INSTALL_MANAGER" \
   V2QUANTUM_INSTALLER_PATH="$INSTALLER_PATH" \
   V2QUANTUM_INSTALL_WATCHDOG="$INSTALL_WATCHDOG" \
+  V2QUANTUM_INSTALL_PORTMAP="$INSTALL_PORTMAP" \
   V2QUANTUM_INSTALL_UNIT="$INSTALL_UNIT" \
+  V2QUANTUM_INSTALL_PORTMAP_UNIT="$INSTALL_PORTMAP_UNIT" \
   V2QUANTUM_INSTALL_WATCHDOG_UNIT="$INSTALL_WATCHDOG_UNIT" \
   V2QUANTUM_INSTALL_WATCHDOG_TIMER="$INSTALL_WATCHDOG_TIMER" \
   V2QUANTUM_CONFIG_DIR="$CONFIG_DIR" \
@@ -70,8 +74,11 @@ test -x "$INSTALL_BIN"
 test -x "$INSTALL_MANAGER"
 test -x "$INSTALLER_PATH"
 test -x "$INSTALL_WATCHDOG"
+test -x "$INSTALL_PORTMAP"
 test -s "$INSTALL_UNIT"
 grep -q 'CAP_NET_ADMIN' "$INSTALL_UNIT"
+test -s "$INSTALL_PORTMAP_UNIT"
+grep -q 'ExecStop=.*/v2quantum-portmap remove %i' "$INSTALL_PORTMAP_UNIT"
 test -s "$INSTALL_WATCHDOG_UNIT"
 test -s "$INSTALL_WATCHDOG_TIMER"
 "$INSTALL_BIN" version | grep -q '^v2quantum-go '

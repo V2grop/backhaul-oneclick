@@ -34,6 +34,9 @@ run_manager() {
     V2QUANTUM_SYSTEMCTL="$systemctl" \
     V2QUANTUM_JOURNALCTL=/usr/bin/true \
     V2QUANTUM_SS=/usr/bin/false \
+    V2QUANTUM_SYSCTL="${V2Q_TEST_SYSCTL:-sysctl}" \
+    V2QUANTUM_SYSCTL_CONFIG="$config_dir/90-v2quantum-udp.conf" \
+    V2QUANTUM_HOST_TUNING="${V2Q_TEST_HOST_TUNING:-0}" \
     "$MANAGER" >"$output_file"
 }
 
@@ -129,12 +132,33 @@ grep -q '"expected_peer_source_ip": "203.0.113.20"' "$MANUAL_RAW_DIR/iran-manual
 # Independent L3 TUN setup code must create valid, separately named peers.
 TUN_SERVER_DIR="$TMP_DIR/tun-server"
 TUN_SERVER_OUTPUT="$TMP_DIR/tun-server-output.txt"
-run_manager "$TUN_SERVER_DIR" $'3\n1\n2\n2\n\n192.0.2.10\n\n\n\n\nalpha-tun\n0\n0\n' "$TUN_SERVER_OUTPUT"
+SYSCTL_FIXTURE="$TMP_DIR/sysctl-fixture"
+cat >"$SYSCTL_FIXTURE" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-n" ]]; then
+  case "${2:-}" in
+    net.core.rmem_max) echo 67108864 ;;
+    *) echo 212992 ;;
+  esac
+  exit 0
+fi
+[[ "$*" == -q\ -p\ * ]]
+EOF
+chmod 755 "$SYSCTL_FIXTURE"
+V2Q_TEST_HOST_TUNING=1 V2Q_TEST_SYSCTL="$SYSCTL_FIXTURE" \
+  run_manager "$TUN_SERVER_DIR" $'3\n1\n2\n2\n\n192.0.2.10\n\n\n\n\n\nalpha-tun\n0\n0\n' "$TUN_SERVER_OUTPUT"
 TUN_SERVER_INSTANCE="iran-alpha-tun"
 test -s "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.json"
 grep -q '"tun": {' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.json"
 grep -q '"pool": 1' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.json"
 grep -q '"profile": "balanced"' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.json"
+test -s "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
+grep -q '^MAP=443=443$' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
+grep -q '^LOCAL_IP=10.77.0.1$' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
+grep -q '^PEER_IP=10.77.0.2$' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
+grep -q '^net.core.rmem_max = 67108864$' "$TUN_SERVER_DIR/90-v2quantum-udp.conf"
+grep -q '^net.core.wmem_max = 33554432$' "$TUN_SERVER_DIR/90-v2quantum-udp.conf"
+grep -q '^net.ipv4.ip_forward = 1$' "$TUN_SERVER_DIR/90-v2quantum-udp.conf"
 set -a
 # shellcheck disable=SC1090
 source "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.env"
@@ -160,6 +184,12 @@ LEGACY_TUN_CLIENT_DIR="$TMP_DIR/legacy-tun-client"
 run_manager "$LEGACY_TUN_CLIENT_DIR" $'3\n2\n'"$LEGACY_TUN_CODE"$'\n\n\n0\n0\n'
 test -s "$LEGACY_TUN_CLIENT_DIR/$TUN_CLIENT_INSTANCE.json"
 grep -q '"profile": "balanced"' "$LEGACY_TUN_CLIENT_DIR/$TUN_CLIENT_INSTANCE.json"
+
+# An existing Iran TUN changes or removes its forwarding rule without recreation or a setup code.
+run_manager "$TUN_SERVER_DIR" $'3\n6\niran-alpha-tun\n8443=443\n0\n0\n'
+grep -q '^MAP=8443=443$' "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
+run_manager "$TUN_SERVER_DIR" $'3\n6\niran-alpha-tun\n-\n0\n0\n'
+test ! -e "$TUN_SERVER_DIR/$TUN_SERVER_INSTANCE.portmap"
 
 # A failed first start must not leave an enabled, half-configured instance.
 FAIL_SYSTEMCTL="$TMP_DIR/systemctl-fail"

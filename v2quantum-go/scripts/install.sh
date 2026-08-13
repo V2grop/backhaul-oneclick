@@ -14,7 +14,9 @@ INSTALL_BIN="${V2QUANTUM_INSTALL_BIN:-/usr/local/bin/v2quantum}"
 INSTALL_MANAGER="${V2QUANTUM_INSTALL_MANAGER:-/usr/local/sbin/v2quantum-manager}"
 INSTALLER_PATH="${V2QUANTUM_INSTALLER_PATH:-/usr/local/sbin/v2quantum-installer}"
 INSTALL_WATCHDOG="${V2QUANTUM_INSTALL_WATCHDOG:-/usr/local/libexec/v2quantum-watchdog}"
+INSTALL_PORTMAP="${V2QUANTUM_INSTALL_PORTMAP:-/usr/local/libexec/v2quantum-portmap}"
 INSTALL_UNIT="${V2QUANTUM_INSTALL_UNIT:-/etc/systemd/system/v2quantum@.service}"
+INSTALL_PORTMAP_UNIT="${V2QUANTUM_INSTALL_PORTMAP_UNIT:-/etc/systemd/system/v2quantum-portmap@.service}"
 INSTALL_WATCHDOG_UNIT="${V2QUANTUM_INSTALL_WATCHDOG_UNIT:-/etc/systemd/system/v2quantum-watchdog@.service}"
 INSTALL_WATCHDOG_TIMER="${V2QUANTUM_INSTALL_WATCHDOG_TIMER:-/etc/systemd/system/v2quantum-watchdog@.timer}"
 CONFIG_DIR="${V2QUANTUM_CONFIG_DIR:-/etc/v2quantum}"
@@ -59,7 +61,9 @@ fi
 for required in \
   "$PROJECT_DIR/scripts/manager.sh" \
   "$PROJECT_DIR/scripts/watchdog.sh" \
+  "$PROJECT_DIR/scripts/portmap.sh" \
   "$PROJECT_DIR/systemd/v2quantum@.service" \
+  "$PROJECT_DIR/systemd/v2quantum-portmap@.service" \
   "$PROJECT_DIR/systemd/v2quantum-watchdog@.service" \
   "$PROJECT_DIR/systemd/v2quantum-watchdog@.timer"; do
   [[ -f "$required" ]] || { echo "Required payload is missing: $required" >&2; exit 1; }
@@ -67,13 +71,13 @@ done
 
 install -d -m750 "$CONFIG_DIR" "$STATE_DIR/backups"
 install -d -m755 "$(dirname -- "$INSTALL_BIN")" "$(dirname -- "$INSTALL_MANAGER")" \
-  "$(dirname -- "$INSTALL_WATCHDOG")" "$(dirname -- "$INSTALL_UNIT")"
+  "$(dirname -- "$INSTALL_WATCHDOG")" "$(dirname -- "$INSTALL_PORTMAP")" "$(dirname -- "$INSTALL_UNIT")"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$STATE_DIR/backups/install-$STAMP"
 BACKUP_CREATED=false
-for target in "$INSTALL_BIN" "$INSTALL_MANAGER" "$INSTALLER_PATH" "$INSTALL_WATCHDOG" \
-  "$INSTALL_UNIT" "$INSTALL_WATCHDOG_UNIT" "$INSTALL_WATCHDOG_TIMER"; do
+for target in "$INSTALL_BIN" "$INSTALL_MANAGER" "$INSTALLER_PATH" "$INSTALL_WATCHDOG" "$INSTALL_PORTMAP" \
+  "$INSTALL_UNIT" "$INSTALL_PORTMAP_UNIT" "$INSTALL_WATCHDOG_UNIT" "$INSTALL_WATCHDOG_TIMER"; do
   if [[ -f "$target" ]]; then
     if [[ "$BACKUP_CREATED" == false ]]; then
       install -d -m700 "$BACKUP_DIR"
@@ -86,7 +90,9 @@ done
 install -m755 "$SOURCE_BINARY" "$INSTALL_BIN"
 install -m755 "$PROJECT_DIR/scripts/manager.sh" "$INSTALL_MANAGER"
 install -m755 "$PROJECT_DIR/scripts/watchdog.sh" "$INSTALL_WATCHDOG"
+install -m755 "$PROJECT_DIR/scripts/portmap.sh" "$INSTALL_PORTMAP"
 install -m644 "$PROJECT_DIR/systemd/v2quantum@.service" "$INSTALL_UNIT"
+install -m644 "$PROJECT_DIR/systemd/v2quantum-portmap@.service" "$INSTALL_PORTMAP_UNIT"
 install -m644 "$PROJECT_DIR/systemd/v2quantum-watchdog@.service" "$INSTALL_WATCHDOG_UNIT"
 install -m644 "$PROJECT_DIR/systemd/v2quantum-watchdog@.timer" "$INSTALL_WATCHDOG_TIMER"
 if [[ -f "$PROJECT_DIR/scripts/oneclick.sh" ]]; then

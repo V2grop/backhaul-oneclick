@@ -80,6 +80,11 @@ reverse TCP mappings and `V2T2_` for the independent point-to-point TUN. The
 manager accepts the older prefixes for migration, but both peers must run the
 new core before using the Quantum v2 wire protocol.
 
+An Iran-side V2TUN can now own an isolated TCP DNAT/SNAT forward such as
+`443=443`. Existing TUNs can add, change or remove it from TUN menu option `6`
+without recreation or a new setup code. Its per-instance systemd service
+removes only its own firewall rules when the TUN stops or is deleted.
+
 The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
 as working. The menu's supported L3 option is the source-built V2TUN core; it
 uses `/dev/net/tun`, `CAP_NET_ADMIN`, a non-persistent per-instance interface,

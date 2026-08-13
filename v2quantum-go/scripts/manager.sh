@@ -10,6 +10,9 @@ RUN_DIR="${V2QUANTUM_RUN_DIR:-/run}"
 SYSTEMCTL="${V2QUANTUM_SYSTEMCTL:-systemctl}"
 JOURNALCTL="${V2QUANTUM_JOURNALCTL:-journalctl}"
 SS="${V2QUANTUM_SS:-ss}"
+SYSCTL="${V2QUANTUM_SYSCTL:-sysctl}"
+SYSCTL_CONFIG="${V2QUANTUM_SYSCTL_CONFIG:-/etc/sysctl.d/90-v2quantum-udp.conf}"
+HOST_TUNING="${V2QUANTUM_HOST_TUNING:-1}"
 
 if (( EUID != 0 )); then
   echo "Run v2quantum-manager as root." >&2
@@ -160,6 +163,14 @@ detect_interface() {
   printf '%s' "${detected:-eth0}"
 }
 
+detect_public_interface() {
+  local detected=""
+  if command -v ip >/dev/null 2>&1; then
+    detected="$(ip -4 route show default 2>/dev/null | awk '/ dev / {for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
+  fi
+  printf '%s' "${detected:-eth0}"
+}
+
 port_is_listening() {
   local proto="$1" port="$2" flag
   command -v "$SS" >/dev/null 2>&1 || return 1
@@ -255,6 +266,32 @@ csv_ports() {
   (( ${#output[@]} > 0 && ${#output[@]} <= 32 )) || return 1
   for item in "${output[@]}"; do
     valid_port "$item" || return 1
+  done
+}
+
+csv_port_mappings() {
+  local input="$1" item public_port target_port
+  local -n output="$2"
+  local -A seen=()
+  output=()
+  input="$(printf '%s' "$input" | tr -d '[:space:]')"
+  [[ -z "$input" || "$input" == "-" ]] && return 0
+  IFS=',' read -r -a output <<<"$input"
+  (( ${#output[@]} <= 32 )) || return 1
+  for item in "${!output[@]}"; do
+    if [[ "${output[$item]}" =~ ^([0-9]+)=([0-9]+)$ ]]; then
+      public_port="${BASH_REMATCH[1]}"
+      target_port="${BASH_REMATCH[2]}"
+    elif valid_port "${output[$item]}"; then
+      public_port="${output[$item]}"
+      target_port="$public_port"
+    else
+      return 1
+    fi
+    valid_port "$public_port" && valid_port "$target_port" || return 1
+    [[ -z "${seen[$public_port]:-}" ]] || return 1
+    seen[$public_port]=1
+    output[$item]="$public_port=$target_port"
   done
 }
 
@@ -428,11 +465,12 @@ raw_block() {
 
 backup_instance() {
   local instance="$1" backup=""
-  if [[ -f "$CONFIG_DIR/$instance.json" || -f "$CONFIG_DIR/$instance.env" ]]; then
+  if [[ -f "$CONFIG_DIR/$instance.json" || -f "$CONFIG_DIR/$instance.env" || -f "$CONFIG_DIR/$instance.portmap" ]]; then
     backup="$STATE_DIR/backups/$instance-$(date +%Y%m%d-%H%M%S)"
     install -d -m700 "$backup"
     [[ -f "$CONFIG_DIR/$instance.json" ]] && cp -a -- "$CONFIG_DIR/$instance.json" "$backup/"
     [[ -f "$CONFIG_DIR/$instance.env" ]] && cp -a -- "$CONFIG_DIR/$instance.env" "$backup/"
+    [[ -f "$CONFIG_DIR/$instance.portmap" ]] && cp -a -- "$CONFIG_DIR/$instance.portmap" "$backup/"
   fi
   printf '%s' "$backup"
 }
@@ -644,6 +682,245 @@ open_firewall_carrier() {
   fi
 }
 
+sysctl_at_least() {
+  local key="$1" minimum="$2" current
+  current="$("$SYSCTL" -n "$key" 2>/dev/null || true)"
+  [[ "$current" =~ ^[0-9]+$ ]] || return 1
+  if (( current > minimum )); then
+    printf '%s' "$current"
+  else
+    printf '%s' "$minimum"
+  fi
+}
+
+apply_tun_host_tuning() {
+  local config_parent config_tmp key value wrote=false
+  [[ "$HOST_TUNING" != "0" ]] || return 0
+  command -v "$SYSCTL" >/dev/null 2>&1 || {
+    warn "sysctl is unavailable; skipped optional UDP buffer tuning."
+    return 0
+  }
+  config_parent="$(dirname -- "$SYSCTL_CONFIG")"
+  if ! install -d -m755 "$config_parent" || \
+     ! config_tmp="$(mktemp "$config_parent/.v2quantum-sysctl.XXXXXX")"; then
+    warn "Could not prepare the optional host-tuning file; TUN setup will continue unchanged."
+    return 0
+  fi
+  if ! {
+    echo "# Managed by V2Quantum. Existing higher kernel limits are preserved."
+    for key in \
+      net.core.rmem_max:33554432 \
+      net.core.wmem_max:33554432 \
+      net.core.netdev_max_backlog:16384 \
+      net.ipv4.udp_rmem_min:262144 \
+      net.ipv4.udp_wmem_min:262144; do
+      value="$(sysctl_at_least "${key%%:*}" "${key#*:}" || true)"
+      if [[ -n "$value" ]]; then
+        printf '%s = %s\n' "${key%%:*}" "$value"
+        wrote=true
+      fi
+    done
+    echo "net.ipv4.ip_forward = 1"
+  } >"$config_tmp"; then
+    rm -f -- "$config_tmp"
+    warn "Could not write optional host tuning; TUN setup will continue unchanged."
+    return 0
+  fi
+  if [[ "$wrote" != true ]]; then
+    warn "Kernel UDP buffer keys were unavailable; only IPv4 forwarding was enabled."
+  fi
+  if ! install -m644 "$config_tmp" "$SYSCTL_CONFIG"; then
+    rm -f -- "$config_tmp"
+    warn "Could not install optional host tuning; TUN setup will continue unchanged."
+    return 0
+  fi
+  rm -f -- "$config_tmp"
+  if "$SYSCTL" -q -p "$SYSCTL_CONFIG" >/dev/null; then
+    ok "Applied safe UDP socket-buffer tuning (no carrier/profile change)."
+  else
+    warn "Saved host tuning at $SYSCTL_CONFIG, but some values could not be applied now."
+  fi
+}
+
+open_firewall_port_mappings() {
+  local mapping public_port failed=false
+  local -n mappings_ref="$1"
+  (( ${#mappings_ref[@]} > 0 )) || return 0
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+    for mapping in "${mappings_ref[@]}"; do
+      public_port="${mapping%%=*}"
+      ufw allow "$public_port/tcp" >/dev/null || failed=true
+    done
+    [[ "$failed" == false ]] && ok "UFW rules added for the Iran TCP forwarding port(s)." || \
+      warn "Could not add every UFW rule; check the Iran TCP port manually."
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    for mapping in "${mappings_ref[@]}"; do
+      public_port="${mapping%%=*}"
+      firewall-cmd --permanent --add-port="$public_port/tcp" >/dev/null || failed=true
+    done
+    firewall-cmd --reload >/dev/null || failed=true
+    [[ "$failed" == false ]] && ok "firewalld rules added for the Iran TCP forwarding port(s)." || \
+      warn "Could not add every firewalld rule; check the Iran TCP port manually."
+  else
+    warn "No active UFW/firewalld detected. Allow the Iran TCP forwarding port(s) in the provider firewall."
+  fi
+  return 0
+}
+
+portmap_port_owner() {
+  local public_port="$1" excluded_instance="${2:-}" file instance
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    instance="${file##*/}"
+    instance="${instance%.portmap}"
+    [[ "$instance" != "$excluded_instance" ]] || continue
+    if grep -q "^MAP=${public_port}=" "$file"; then
+      printf '%s' "$instance"
+      return 0
+    fi
+  done < <(find "$CONFIG_DIR" -maxdepth 1 -type f -name '*.portmap' -print 2>/dev/null | LC_ALL=C sort)
+  return 1
+}
+
+prompt_tun_port_mappings() {
+  local default_value="$1" output_name="$2" excluded_instance="${3:-}" input mapping public_port owner
+  local -n output="$output_name"
+  input="$(prompt_default "User TCP port (443 = Iran 443 to outside 443; - disables)" "$default_value")"
+  csv_port_mappings "$input" "$output_name" || {
+    error "Use 443 for the same port, IRAN_PORT=OUTSIDE_PORT for a different port, or - to disable."
+    return 1
+  }
+  for mapping in "${output[@]}"; do
+    public_port="${mapping%%=*}"
+    owner="$(portmap_port_owner "$public_port" "$excluded_instance" || true)"
+    if [[ -n "$owner" ]]; then
+      error "Iran TCP $public_port is already forwarded by $owner. Choose another port or change that instance first."
+      return 1
+    fi
+    if port_is_listening tcp "$public_port"; then
+      warn "Iran TCP $public_port already has a local listener. The manager will not stop or alter it."
+      confirm "Forward external TCP $public_port through this TUN anyway?" || return 1
+    fi
+  done
+}
+
+portmap_config_tmp() {
+  local instance="$1" local_ip="$2" peer_ip="$3" public_interface="$4"
+  local -n mappings_ref="$5"
+  local config_tmp mapping
+  config_tmp="$(mktemp "$CONFIG_DIR/.${instance}.portmap.XXXXXX")"
+  {
+    echo "VERSION=1"
+    printf 'DEVICE=%s\n' "$(tun_device_name "$instance")"
+    printf 'LOCAL_IP=%s\n' "$local_ip"
+    printf 'PEER_IP=%s\n' "$peer_ip"
+    printf 'PUBLIC_INTERFACE=%s\n' "$public_interface"
+    for mapping in "${mappings_ref[@]}"; do
+      printf 'MAP=%s\n' "$mapping"
+    done
+  } >"$config_tmp"
+  chmod 600 "$config_tmp"
+  printf '%s' "$config_tmp"
+}
+
+disable_tun_portmap() {
+  local instance="$1"
+  "$SYSTEMCTL" disable --now "v2quantum-portmap@$instance.service" >/dev/null 2>&1 || true
+  rm -f -- "$CONFIG_DIR/$instance.portmap"
+  ok "TCP forwarding is disabled for $instance; the TUN itself was not changed."
+}
+
+activate_tun_portmap() {
+  local instance="$1" local_ip="$2" peer_ip="$3" public_interface="$4"
+  local mappings_name="$5"
+  local -n mappings_ref="$mappings_name"
+  local config_tmp old_tmp="" destination="$CONFIG_DIR/$instance.portmap"
+  (( ${#mappings_ref[@]} > 0 )) || {
+    disable_tun_portmap "$instance"
+    return 0
+  }
+
+  config_tmp="$(portmap_config_tmp "$instance" "$local_ip" "$peer_ip" "$public_interface" "$mappings_name")"
+  if [[ -f "$destination" ]]; then
+    old_tmp="$(mktemp "$CONFIG_DIR/.${instance}.portmap.previous.XXXXXX")"
+    cp -a -- "$destination" "$old_tmp"
+  fi
+
+  # Stop first so ExecStop reads the old mapping and removes only its exact rules.
+  "$SYSTEMCTL" stop "v2quantum-portmap@$instance.service" >/dev/null 2>&1 || true
+  install -m600 "$config_tmp" "$destination"
+  rm -f -- "$config_tmp"
+
+  # UFW/firewalld reloads may rebuild their tables, so do that before the
+  # per-instance service inserts its exact DNAT/SNAT/FORWARD/MSS rules.
+  open_firewall_port_mappings "$mappings_name"
+
+  if "$SYSTEMCTL" enable "v2quantum-portmap@$instance.service" >/dev/null && \
+     "$SYSTEMCTL" restart "v2quantum-portmap@$instance.service" && \
+     "$SYSTEMCTL" is-active --quiet "v2quantum-portmap@$instance.service"; then
+    rm -f -- "$old_tmp"
+    ok "TCP forwarding is active: IRAN_IP:${mappings_ref[0]%%=*} -> $peer_ip:${mappings_ref[0]#*=}."
+    (( ${#mappings_ref[@]} == 1 )) || ok "Configured ${#mappings_ref[@]} TCP forwarding rules."
+    for mapping in "${mappings_ref[@]}"; do
+      echo "Outside listener must be 0.0.0.0:${mapping#*=} or $peer_ip:${mapping#*=} (not 127.0.0.1 only)."
+    done
+    return 0
+  fi
+
+  error "The TUN stayed active, but its TCP forwarding service failed."
+  "$JOURNALCTL" -u "v2quantum-portmap@$instance.service" -n 30 --no-pager || true
+  "$SYSTEMCTL" stop "v2quantum-portmap@$instance.service" >/dev/null 2>&1 || true
+  if [[ -n "$old_tmp" ]]; then
+    install -m600 "$old_tmp" "$destination"
+    rm -f -- "$old_tmp"
+    "$SYSTEMCTL" restart "v2quantum-portmap@$instance.service" >/dev/null 2>&1 || true
+    warn "Previous TCP forwarding configuration was restored."
+  else
+    rm -f -- "$destination"
+    "$SYSTEMCTL" disable "v2quantum-portmap@$instance.service" >/dev/null 2>&1 || true
+  fi
+  return 1
+}
+
+existing_portmap_value() {
+  local instance="$1" value="" mapping
+  while IFS= read -r mapping; do
+    [[ "$mapping" =~ ^[0-9]+=[0-9]+$ ]] || continue
+    [[ -z "$value" ]] || value+=','
+    value+="$mapping"
+  done < <(sed -n 's/^MAP=//p' "$CONFIG_DIR/$instance.portmap" 2>/dev/null)
+  printf '%s' "${value:-443}"
+}
+
+configure_existing_tun_portmap() {
+  local instance config role device local_cidr local_ip peer_ip public_interface default_value
+  local mappings=()
+  instance="$(pick_instance)" || return 1
+  config="$CONFIG_DIR/$instance.json"
+  role="$(sed -n 's/.*"role"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)"
+  [[ "$role" == "server" ]] && grep -q '"tun"[[:space:]]*:' "$config" || {
+    error "Choose an Iran L3-TUN instance (role=server)."
+    return 1
+  }
+  device="$(sed -n 's/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | tail -n1)"
+  local_cidr="$(sed -n 's/.*"local_address"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)"
+  peer_ip="$(sed -n 's/.*"peer_address"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)"
+  local_ip="${local_cidr%/*}"
+  [[ "$device" == "$(tun_device_name "$instance")" ]] && valid_ipv4 "$local_ip" && valid_ipv4 "$peer_ip" || {
+    error "Could not read valid TUN addresses from $config."
+    return 1
+  }
+  default_value="$(existing_portmap_value "$instance")"
+  prompt_tun_port_mappings "$default_value" mappings "$instance" || return 1
+  if (( ${#mappings[@]} == 0 )); then
+    disable_tun_portmap "$instance"
+    return 0
+  fi
+  public_interface="$(detect_public_interface)"
+  apply_tun_host_tuning
+  activate_tun_portmap "$instance" "$local_ip" "$peer_ip" "$public_interface" mappings
+}
+
 configure_server() {
 	local mode profile token public_host carrier_port proto public_input public_port health_port raw_json="" setup_code instance label
   local public_ports=()
@@ -750,8 +1027,9 @@ configure_client() {
 
 configure_tun_server() {
   local mode profile token public_host carrier_port proto health_port instance label
-  local server_cidr client_cidr server_ip client_ip mtu routes_input setup_code
+  local server_cidr client_cidr server_ip client_ip mtu routes_input setup_code public_interface mapping
   local routes=()
+  local port_mappings=()
 
   echo
   echo "L3 TUN creates a private point-to-point IP link. It is separate from Raw/Spoof."
@@ -782,13 +1060,21 @@ configure_tun_server() {
   [[ "$mtu" =~ ^[0-9]+$ ]] && (( mtu >= 576 && mtu <= 9000 )) || { error "MTU must be 576-9000."; return 1; }
   routes_input="$(prompt_default "Specific networks behind outside to route via TUN (- for none)" "-")"
   csv_routes "$routes_input" routes || { error "Invalid route list."; return 1; }
+  prompt_tun_port_mappings "443" port_mappings || return 1
 
   health_port="$(find_free_port tcp 19090)"
   instance="$(new_instance iran "tun-${mode}-${carrier_port}")"
   label="${instance#iran-}"
   write_tun_instance server "$instance" "$mode" "$token" "$health_port" "$carrier_port" \
     "$server_cidr" "$client_ip" "$mtu" routes
+  apply_tun_host_tuning
   open_firewall_carrier "$mode" "$carrier_port"
+  if (( ${#port_mappings[@]} > 0 )); then
+    public_interface="$(detect_public_interface)"
+    if ! activate_tun_portmap "$instance" "$server_ip" "$client_ip" "$public_interface" port_mappings; then
+      warn "Use TUN menu option 6 to retry the TCP forward without recreating the TUN."
+    fi
+  fi
   setup_code="$(make_tun_setup_code "$token" "$mode" "$public_host" "$carrier_port" "$profile" \
     "$label" "$server_cidr" "$client_cidr" "$mtu")"
 
@@ -796,6 +1082,9 @@ configure_tun_server() {
   printf '%sCOPY THIS TUN SETUP CODE TO THE OUTSIDE SERVER:%s\n' "$cyan" "$reset"
   printf '%s\n' "$setup_code"
   echo "After both sides start, test: ping -c 3 $client_ip"
+  for mapping in "${port_mappings[@]}"; do
+    echo "User traffic: $public_host:${mapping%%=*} -> outside TUN $client_ip:${mapping#*=} (TCP)"
+  done
 }
 
 configure_tun_client() {
@@ -825,6 +1114,7 @@ configure_tun_client() {
   instance="$(new_instance outside "$label_hint")"
   write_tun_instance client "$instance" "$mode" "$token" "$health_port" "$server_endpoint" \
     "$client_cidr" "$server_ip" "$mtu" routes
+  apply_tun_host_tuning
   ok "TUN is active with reconnect and watchdog recovery."
   echo "Test the Iran side: ping -c 3 $server_ip"
 }
@@ -886,6 +1176,9 @@ show_status() {
   instance="$(pick_instance)" || return 1
   safe_instance "$instance" || { error "Invalid instance."; return 1; }
   "$SYSTEMCTL" --no-pager --full status "v2quantum@$instance.service" || true
+  if [[ -f "$CONFIG_DIR/$instance.portmap" ]]; then
+    "$SYSTEMCTL" --no-pager --full status "v2quantum-portmap@$instance.service" || true
+  fi
   load_instance_env "$instance"
   "$BIN" healthcheck -config "$CONFIG_DIR/$instance.json" -timeout 5s || true
 }
@@ -915,9 +1208,11 @@ delete_instance() {
   safe_instance "$instance" || { error "Invalid instance."; return 1; }
   confirm "Permanently delete $instance and its config, token, watchdog state and per-instance backups?" || { echo "Cancelled."; return 0; }
   "$SYSTEMCTL" disable --now "v2quantum-watchdog@$instance.timer" 2>/dev/null || true
+  "$SYSTEMCTL" disable --now "v2quantum-portmap@$instance.service" 2>/dev/null || true
   "$SYSTEMCTL" disable --now "v2quantum@$instance.service" 2>/dev/null || true
-  "$SYSTEMCTL" reset-failed "v2quantum@$instance.service" "v2quantum-watchdog@$instance.service" 2>/dev/null || true
-  rm -f -- "$CONFIG_DIR/$instance.json" "$CONFIG_DIR/$instance.env" \
+  "$SYSTEMCTL" reset-failed "v2quantum@$instance.service" "v2quantum-watchdog@$instance.service" \
+    "v2quantum-portmap@$instance.service" 2>/dev/null || true
+  rm -f -- "$CONFIG_DIR/$instance.json" "$CONFIG_DIR/$instance.env" "$CONFIG_DIR/$instance.portmap" \
     "$RUN_DIR/v2quantum-watchdog-$instance.failures"
   while IFS= read -r backup_path; do
     [[ -n "$backup_path" ]] || continue
@@ -936,6 +1231,7 @@ tun_menu() {
     echo "3) List all V2Quantum instances"
     echo "4) Status/health of one instance"
     echo "5) Delete one instance completely"
+    echo "6) Add/change Iran TUN TCP forward (for port 443, enter 443)"
     echo "0) Return"
     choice="$(prompt_default "Choice" "1")"
     case "${choice,,}" in
@@ -944,6 +1240,7 @@ tun_menu() {
       3|list) list_instances ;;
       4|status) show_status ;;
       5|delete|remove) delete_instance ;;
+      6|forward|portmap) configure_existing_tun_portmap || warn "TCP forwarding was not changed." ;;
       0|back|q|quit|exit) return 0 ;;
       *) error "Unknown choice." ;;
     esac

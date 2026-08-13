@@ -100,6 +100,7 @@ uninstall_all() {
   while IFS= read -r instance; do
     [[ -n "$instance" ]] || continue
     systemctl disable --now "v2quantum-watchdog@$instance.timer" 2>/dev/null || true
+    systemctl disable --now "v2quantum-portmap@$instance.service" 2>/dev/null || true
     systemctl disable --now "v2quantum@$instance.service" 2>/dev/null || true
   done < <(find /etc/v2quantum -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//')
 
@@ -108,9 +109,12 @@ uninstall_all() {
     /usr/local/sbin/v2quantum-manager \
     /usr/local/sbin/v2quantum-installer \
     /usr/local/libexec/v2quantum-watchdog \
+    /usr/local/libexec/v2quantum-portmap \
     /etc/systemd/system/v2quantum@.service \
+    /etc/systemd/system/v2quantum-portmap@.service \
     /etc/systemd/system/v2quantum-watchdog@.service \
-    /etc/systemd/system/v2quantum-watchdog@.timer
+    /etc/systemd/system/v2quantum-watchdog@.timer \
+    /etc/sysctl.d/90-v2quantum-udp.conf
   systemctl daemon-reload
 
   if [[ "$PURGE" == true && -d /etc/v2quantum ]]; then
@@ -130,20 +134,20 @@ fi
 
 install_dependencies() {
   local missing=false
-  for command_name in curl tar sha256sum install awk sed grep mktemp systemctl ip; do
+  for command_name in curl tar sha256sum install awk sed grep mktemp systemctl ip iptables sysctl; do
     command -v "$command_name" >/dev/null 2>&1 || missing=true
   done
   [[ "$missing" == false ]] && return 0
 
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates tar coreutils iproute2
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates tar coreutils iproute2 iptables procps
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y curl ca-certificates tar coreutils iproute
+    dnf install -y curl ca-certificates tar coreutils iproute iptables procps-ng
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y curl ca-certificates tar coreutils iproute
+    yum install -y curl ca-certificates tar coreutils iproute iptables procps-ng
   else
-    die "Install curl, ca-certificates, tar, coreutils, iproute2 and systemd first."
+    die "Install curl, ca-certificates, tar, coreutils, iproute2, iptables, procps and systemd first."
   fi
 }
 
@@ -186,7 +190,9 @@ release_install() {
     "v2quantum-manager"
     "v2quantum-installer"
     "v2quantum-watchdog"
+    "v2quantum-portmap"
     "v2quantum@.service"
+    "v2quantum-portmap@.service"
     "v2quantum-watchdog@.service"
     "v2quantum-watchdog@.timer"
   )
@@ -214,7 +220,9 @@ release_install() {
   local backup_created=false target
   for target in /usr/local/bin/v2quantum /usr/local/sbin/v2quantum-manager \
     /usr/local/sbin/v2quantum-installer /usr/local/libexec/v2quantum-watchdog \
+    /usr/local/libexec/v2quantum-portmap \
     /etc/systemd/system/v2quantum@.service \
+    /etc/systemd/system/v2quantum-portmap@.service \
     /etc/systemd/system/v2quantum-watchdog@.service \
     /etc/systemd/system/v2quantum-watchdog@.timer; do
     if [[ -f "$target" ]]; then
@@ -230,7 +238,9 @@ release_install() {
   install -Dm755 "$payload/v2quantum-manager" /usr/local/sbin/v2quantum-manager
   install -Dm755 "$payload/v2quantum-installer" /usr/local/sbin/v2quantum-installer
   install -Dm755 "$payload/v2quantum-watchdog" /usr/local/libexec/v2quantum-watchdog
+  install -Dm755 "$payload/v2quantum-portmap" /usr/local/libexec/v2quantum-portmap
   install -Dm644 "$payload/v2quantum@.service" /etc/systemd/system/v2quantum@.service
+  install -Dm644 "$payload/v2quantum-portmap@.service" /etc/systemd/system/v2quantum-portmap@.service
   install -Dm644 "$payload/v2quantum-watchdog@.service" /etc/systemd/system/v2quantum-watchdog@.service
   install -Dm644 "$payload/v2quantum-watchdog@.timer" /etc/systemd/system/v2quantum-watchdog@.timer
   install -d -m750 /etc/v2quantum /var/lib/v2quantum/backups

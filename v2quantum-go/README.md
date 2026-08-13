@@ -6,7 +6,7 @@
 
 - Reverse TCP forwarding با چند mapping نام‌دار و محدودشده؛ سرور نمی‌تواند مقصد دلخواه روی کلاینت باز کند.
 - سه carrier مستقل: `tcp`، `quantum_udp` و `raw_icmp` آزمایشی.
-- TUN مستقل لایهٔ ۳ روی carrierهای TCP یا Quantum UDP با interface مجزا برای هر نمونه.
+- TUN مستقل لایهٔ ۳ روی carrierهای TCP یا Quantum UDP با interface مجزا برای هر نمونه و TCP port-forward خودکار روی ایران.
 - Multiplex چند صد stream روی pool اتصال‌ها با انتخاب کم‌بارترین session.
 - احراز هویت دوطرفه PSK با nonce تصادفی و HMAC-SHA256.
 - رمزنگاری تمام frameها با AES-256-GCM، کلید جدا برای هر جهت و counter ضد replay/order.
@@ -92,10 +92,20 @@ bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-onecl
 از منوی عمومی گزینهٔ `V2TUN` یا دستور زیر استفاده کنید:
 
 ```bash
-tunnel-manager --tun
+v2quantum-manager --tun
 ```
 
-در ایران گزینهٔ ساخت server را بزنید و کد `V2T2_` را به خارج منتقل کنید. خارج همان کد را Paste می‌کند؛ `V2T1_` قدیمی نیز خوانده می‌شود. آدرس‌های پیش‌فرض `10.77.0.1/30` و `10.77.0.2/30` هستند و MTU پیش‌فرض `1280` است. پس از اتصال:
+در ایران گزینهٔ ساخت server را بزنید. در سؤال پورت کاربر برای انتقال پورت `443` فقط عدد `443` را وارد کنید یا Enter بزنید؛ حالت پیشرفتهٔ `443=443` نیز پذیرفته می‌شود. سپس کد `V2T2_` را به خارج منتقل کنید. خارج همان کد را Paste می‌کند؛ `V2T1_` قدیمی نیز خوانده می‌شود. آدرس‌های پیش‌فرض `10.77.0.1/30` و `10.77.0.2/30` هستند و MTU پیش‌فرض `1280` است. Xray خارج باید روی `0.0.0.0:443` یا `10.77.0.2:443` گوش کند و کاربر به `IRAN_SERVER_IP:443` وصل می‌شود. روی فایروال ایران، پورت carrier (مثلاً `8900/udp`) و `443/tcp` را باز کنید؛ روی IPها Cloudflare Proxy لازم نیست.
+
+برای TUNی که از قبل ساخته شده، نیازی به ساخت دوباره یا setup code جدید نیست:
+
+1. روی ایران `v2quantum-manager --tun` را اجرا کنید.
+2. گزینهٔ `6` را بزنید، نمونهٔ TUN ایران را انتخاب کنید و فقط `443` بدهید.
+3. برای تغییر پورت دوباره گزینهٔ `6` را اجرا کنید؛ برای حذف کامل port-forward فقط `-` بدهید.
+
+قوانین DNAT/SNAT/FORWARD و TCP MSS clamp در یک سرویس مستقل به نام `v2quantum-portmap@INSTANCE` نگهداری می‌شوند. MSS با MTU کوچک‌تر TUN هماهنگ می‌شود تا fragmentation و گیرکردن اتصال کم شود. با stop/restart/delete همان TUN، فقط قوانین دقیق همان نمونه خودکار برداشته یا دوباره اعمال می‌شوند؛ config و سرویس‌های Backhaul، XWSMUX و سایر V2Quantumها تغییر نمی‌کنند. manager همچنین حداقل امن بافرهای UDP کرنل را تا اندازهٔ موردنیاز پروفایل Max بالا می‌برد و مقدارهای بالاتر موجود را پایین نمی‌آورد؛ پروفایل، FEC یا wire protocol را عوض نمی‌کند.
+
+پس از اتصال:
 
 ```bash
 # ایران
@@ -105,7 +115,7 @@ ping -c 3 10.77.0.2
 ping -c 3 10.77.0.1
 ```
 
-هر TUN یک interface غیرماندگار با نام یکتا می‌سازد؛ با توقف یا حذف همان سرویس interface نیز حذف می‌شود. route پیش‌فرض `0.0.0.0/0` عمداً توسط manager پذیرفته نمی‌شود تا outer carrier داخل خود TUN loop نشود. برای route کردن subnetهای پشت دو سرور، subnetهای مشخص را وارد کنید و IP forwarding/firewall را متناسب با شبکهٔ خود تنظیم کنید. TUN به `iproute2`، `/dev/net/tun` و `CAP_NET_ADMIN` نیاز دارد. این مسیر از Raw/Spoof جداست و carrier خام ICMP را استفاده نمی‌کند.
+هر TUN یک interface غیرماندگار با نام یکتا می‌سازد؛ با توقف یا حذف همان سرویس interface نیز حذف می‌شود. route پیش‌فرض `0.0.0.0/0` عمداً توسط manager پذیرفته نمی‌شود تا outer carrier داخل خود TUN loop نشود. TCP port-forward مدیریت‌شده IPv4 است؛ برای route کردن subnetهای دیگر، subnetهای مشخص را وارد کنید. TUN به `iproute2`، `iptables`، `/dev/net/tun` و `CAP_NET_ADMIN` نیاز دارد. این مسیر از Raw/Spoof جداست و carrier خام ICMP را استفاده نمی‌کند.
 
 مدیریت بعد از نصب:
 
@@ -178,7 +188,7 @@ sudo v2quantum spoof-scan -peer PEER_REAL_IPV4 -json
 
 - PSK را داخل JSON یا Git قرار ندهید؛ installer آن را با mode `0600` در `/etc/v2quantum/*.env` نگه می‌دارد.
 - handshake فعلی PSK-based است و forward secrecy ندارد؛ برای تغییر دوره‌ای، یک token جدید روی هر دو سمت قرار دهید و سرویس‌ها را restart کنید.
-- فقط TCP mapping پیاده‌سازی شده است. UDP سرویس کاربر هنوز mapping مستقل ندارد؛ `quantum_udp` نام carrier است، نه UDP port-forward. TUN بستهٔ کامل IP را مستقل از mapping حمل می‌کند.
+- فقط TCP mapping و TCP port-forward مدیریت‌شدهٔ TUN پیاده‌سازی شده است. UDP سرویس کاربر هنوز mapping مستقل ندارد؛ `quantum_udp` نام carrier است، نه UDP port-forward. TUN بستهٔ کامل IP را حمل می‌کند.
 - health endpoint به‌صورت پیش‌فرض public نیست.
 - Raw ICMP روی Linux اجرا می‌شود و به `CAP_NET_RAW` نیاز دارد.
 - TUN روی Linux اجرا می‌شود و به `CAP_NET_ADMIN` و ابزار `ip` نیاز دارد.
@@ -189,6 +199,7 @@ sudo v2quantum spoof-scan -peer PEER_REAL_IPV4 -json
 - ردشدن PSK اشتباه و حفاظت sequence رکوردها.
 - انتقال سرتاسری هم‌زمان روی TCP و Quantum v2 UDP، شامل loss، reorder، fast recovery و انتقال دوطرفه.
 - انتقال دوطرفهٔ بستهٔ IP در TUN روی carrier رمز‌شده با interface آزمایشی in-memory.
+- اعمال idempotent و حذف دقیق قوانین DNAT/SNAT/FORWARD/MSS هر نمونهٔ TUN.
 - Raw packet loopback، Quantum روی Raw ICMP و reverse tunnel رمز‌شده روی Raw ICMP.
 - نصب ایزوله، نگهداری فایل‌های Backhaul، rollback تنظیمات در خطای start و حذف با `y` کوچک.
 - race detector، vet و build باینری در فرایند release بررسی می‌شوند.
