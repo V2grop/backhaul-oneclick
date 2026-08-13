@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-INSTALLER_VERSION="0.3.0"
+INSTALLER_VERSION="0.3.1"
 OVERRIDE_REPO="${V2QUANTUM_REPO:-}"
 OVERRIDE_REF="${V2QUANTUM_REF:-}"
 OVERRIDE_VERSION="${V2QUANTUM_VERSION:-}"
@@ -80,13 +80,25 @@ ok() { printf '%s[OK]%s %s\n' "$green" "$reset" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$yellow" "$reset" "$*"; }
 die() { printf '%s[ERROR]%s %s\n' "$red" "$reset" "$*" >&2; exit 1; }
 
+# Preserve an interactive terminal for the manager even when this installer
+# itself was downloaded through a pipe.
+INSTALLER_INPUT_FD=0
+if [[ ! -t 0 ]]; then
+  if { exec {installer_tty_fd}</dev/tty; } 2>/dev/null; then
+    INSTALLER_INPUT_FD="$installer_tty_fd"
+  fi
+fi
+
 confirm() {
   local prompt="$1" answer
   if [[ "$ASSUME_YES" == true ]]; then
     return 0
   fi
   printf '%s [y/N]: ' "$prompt" >&2
-  IFS= read -r answer
+  if ! IFS= read -r -u "$INSTALLER_INPUT_FD" answer; then
+    warn "Interactive terminal input is unavailable."
+    return 1
+  fi
   answer="${answer,,}"
   [[ "$answer" == "y" || "$answer" == "yes" ]]
 }
@@ -334,7 +346,7 @@ ok "V2Quantum installed from $INSTALLED_FROM"
 /usr/local/bin/v2quantum version
 if [[ "$OPEN_MENU" == true ]]; then
   if [[ "${V2QUANTUM_MANAGER_MODE:-}" == "tun" ]]; then
-    exec /usr/local/sbin/v2quantum-manager --tun
+    exec /usr/local/sbin/v2quantum-manager --tun <&"$INSTALLER_INPUT_FD"
   fi
-  exec /usr/local/sbin/v2quantum-manager
+  exec /usr/local/sbin/v2quantum-manager <&"$INSTALLER_INPUT_FD"
 fi

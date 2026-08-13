@@ -104,7 +104,7 @@ CURRENT_MANAGER="$TMP_DIR/current-v2quantum-manager"
 cat >"$CURRENT_MANAGER" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  echo "v2quantum-manager 0.3.1"
+  echo "v2quantum-manager 0.3.2"
   exit 0
 fi
 printf 'current-manager:%s\n' "${1:-all}" >>"${TUNNEL_TEST_LOG:?}"
@@ -122,7 +122,7 @@ OUTDATED_MANAGER="$TMP_DIR/outdated-v2quantum-manager"
 cat >"$OUTDATED_MANAGER" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  echo "v2quantum-manager 0.3.0"
+  echo "v2quantum-manager 0.3.1"
   exit 0
 fi
 echo 'outdated-manager-was-opened' >>"${TUNNEL_TEST_LOG:?}"
@@ -179,6 +179,6 @@ printf '1\n0\n0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/backhaul
 grep -q 'Backhaul family' "$TMP_DIR/backhaul-menu.txt"
 grep -q '1) Standard Backhaul - layer-4 transports' "$TMP_DIR/backhaul-menu.txt"
 grep -q '2) XWSMUX Max - optimized Cloudflare profile' "$TMP_DIR/backhaul-menu.txt"
-grep -q '3) V2TUN - independent encrypted layer-3 tunnel' "$TMP_DIR/backhaul-menu.txt"
+grep -q '3) V2TUN - encrypted L3 tunnel + managed TCP port forward' "$TMP_DIR/backhaul-menu.txt"
 
 echo "universal launcher tests passed"

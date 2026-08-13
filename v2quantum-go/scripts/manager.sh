@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-MANAGER_VERSION="0.3.1"
+MANAGER_VERSION="0.3.2"
 if [[ "${1:-}" == "--version" ]]; then
   echo "v2quantum-manager $MANAGER_VERSION"
   exit 0
@@ -39,17 +39,35 @@ ok() { printf '%s[OK]%s %s\n' "$green" "$reset" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$yellow" "$reset" "$*"; }
 error() { printf '%s[ERROR]%s %s\n' "$red" "$reset" "$*" >&2; }
 
+# A manager started by a downloaded bootstrap may inherit the exhausted curl
+# pipe as stdin. Keep interactive answers on the controlling terminal when one
+# exists; regular stdin remains available for automation and tests.
+MANAGER_INPUT_FD=0
+if [[ ! -t 0 ]]; then
+  if { exec {manager_tty_fd}</dev/tty; } 2>/dev/null; then
+    MANAGER_INPUT_FD="$manager_tty_fd"
+  fi
+fi
+
+read_user_value() {
+  local output_name="$1"
+  if ! IFS= read -r -u "$MANAGER_INPUT_FD" "$output_name"; then
+    error "Interactive terminal input is unavailable. Run the Universal Tunnel Manager from a terminal."
+    return 1
+  fi
+}
+
 prompt_default() {
   local message="$1" default="$2" answer
   printf '%s [%s]: ' "$message" "$default" >&2
-  IFS= read -r answer
+  read_user_value answer || return 1
   printf '%s' "${answer:-$default}"
 }
 
 confirm() {
   local message="$1" answer
   printf '%s [y/N]: ' "$message" >&2
-  IFS= read -r answer
+  read_user_value answer || return 1
   answer="${answer,,}"
   [[ "$answer" == "y" || "$answer" == "yes" ]]
 }
@@ -986,7 +1004,7 @@ configure_client() {
 	local input mode token server_endpoint profile target_input health_port raw_json="" count instance label_hint
 	local targets=()
 	printf 'Paste Iran setup code (V2Q3_/V2Q2_/V2Q1_...) or a raw PSK: ' >&2
-	IFS= read -r input
+	read_user_value input || return 1
 	if [[ "$input" == V2Q1_* || "$input" == V2Q2_* || "$input" == V2Q3_* ]]; then
 		parse_setup_code "$input" || { error "Invalid setup code."; return 1; }
     token="$CODE_TOKEN"
@@ -1099,7 +1117,7 @@ configure_tun_client() {
   local routes=()
 
 	printf 'Paste the V2T2_ (or legacy V2T1_) setup code from Iran: ' >&2
-  IFS= read -r input
+  read_user_value input || return 1
   parse_tun_setup_code "$input" || { error "Invalid TUN setup code."; return 1; }
   token="$TUN_CODE_TOKEN"
   mode="$TUN_CODE_MODE"

@@ -85,11 +85,16 @@ An Iran-side V2TUN can now own an isolated TCP DNAT/SNAT forward such as
 without recreation or a new setup code. Its per-instance systemd service
 removes only its own firewall rules when the TUN stops or is deleted.
 
-The short branch-pinned installer/updater for both V2TUN peers is:
+Use the same Universal Tunnel Manager on both V2TUN peers. On this branch the
+single entry command is:
 
 ```bash
-curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/install-v2tun.sh | bash
+TUNNEL_MANAGER_REF=codex/v2quantum-go-v1 bash <(curl -fsSL --ipv4 "https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/oneclick-universal.sh?cb=$(date +%s)")
 ```
+
+Choose `1) Backhaul family`, then `3) V2TUN`. The older
+`install-v2tun.sh` URL remains only as a backward-compatible helper and is no
+longer the recommended entry point.
 
 The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
 as working. The menu's supported L3 option is the source-built V2TUN core; it

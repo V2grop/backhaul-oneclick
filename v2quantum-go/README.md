@@ -89,13 +89,14 @@ bash <(curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-onecl
 
 ## TUN مستقل لایهٔ ۳
 
-نصب یا آپدیت نهایی و کوتاه روی هر دو سرور ایران و خارج:
+روی هر دو سرور ایران و خارج همان منوی جامع پروژه را اجرا کنید:
 
 ```bash
-curl -fsSL --ipv4 https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/install-v2tun.sh | bash
+TUNNEL_MANAGER_REF=codex/v2quantum-go-v1 bash <(curl -fsSL --ipv4 "https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/oneclick-universal.sh?cb=$(date +%s)")
 ```
 
-از منوی عمومی گزینهٔ `V2TUN` یا دستور زیر استفاده کنید:
+از منوی اصلی گزینهٔ `1) Backhaul family` و سپس `3) V2TUN` را بزنید. برای
+اجرای مستقیم مدیر نصب‌شده نیز می‌توانید از دستور زیر استفاده کنید:
 
 ```bash
 v2quantum-manager --tun

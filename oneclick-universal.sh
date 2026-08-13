@@ -3,8 +3,8 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.2.1"
-V2QUANTUM_MANAGER_REVISION="0.3.1"
+SCRIPT_VERSION="1.2.2"
+V2QUANTUM_MANAGER_REVISION="0.3.2"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -226,7 +226,7 @@ backhaul_menu() {
     echo "===================================================="
     echo "1) Standard Backhaul - layer-4 transports"
     echo "2) XWSMUX Max - optimized Cloudflare profile"
-    echo "3) V2TUN - independent encrypted layer-3 tunnel"
+    echo "3) V2TUN - encrypted L3 tunnel + managed TCP port forward"
     echo "0) Return to universal menu"
     echo
     IFS= read -r -p "Choose [0-3]: " choice

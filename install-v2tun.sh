@@ -8,6 +8,15 @@ REF="${V2QUANTUM_REF:-${TUNNEL_MANAGER_REF:-codex/v2quantum-go-v1}}"
 CURL_BIN="${V2TUN_BOOTSTRAP_CURL:-curl}"
 SKIP_ROOT_CHECK="${V2TUN_BOOTSTRAP_SKIP_ROOT_CHECK:-0}"
 
+# Backward-compatible helper only. The recommended entry point is now the
+# Universal Tunnel Manager. Keep this wrapper interactive for older commands.
+BOOTSTRAP_INPUT_FD=0
+if [[ ! -t 0 ]]; then
+  if { exec {bootstrap_tty_fd}</dev/tty; } 2>/dev/null; then
+    BOOTSTRAP_INPUT_FD="$bootstrap_tty_fd"
+  fi
+fi
+
 if [[ ! "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   echo "Invalid V2Quantum repository." >&2
   exit 2
@@ -42,4 +51,4 @@ env \
   V2QUANTUM_REPO="$REPO" \
   V2QUANTUM_REF="$REF" \
   V2QUANTUM_MANAGER_MODE=tun \
-  bash "$TMP_FILE" --source
+  bash "$TMP_FILE" --source <&"$BOOTSTRAP_INPUT_FD"

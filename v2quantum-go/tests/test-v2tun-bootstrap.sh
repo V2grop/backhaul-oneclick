@@ -20,6 +20,8 @@ printf 'repo=%s\n' "${V2QUANTUM_REPO:-}" >>"${V2TUN_TEST_LOG:?}"
 printf 'ref=%s\n' "${V2QUANTUM_REF:-}" >>"${V2TUN_TEST_LOG:?}"
 printf 'mode=%s\n' "${V2QUANTUM_MANAGER_MODE:-}" >>"${V2TUN_TEST_LOG:?}"
 printf 'args=%s\n' "$*" >>"${V2TUN_TEST_LOG:?}"
+IFS= read -r terminal_value
+printf 'input=%s\n' "$terminal_value" >>"${V2TUN_TEST_LOG:?}"
 EOF
 
 FAKE_CURL="$TMP_DIR/curl"
@@ -39,7 +41,7 @@ cp "${V2TUN_TEST_INSTALLER:?}" "$destination"
 EOF
 chmod 755 "$FAKE_CURL" "$INSTALLER_FIXTURE"
 
-env \
+printf 'terminal-stays-open\n' | env \
   V2TUN_BOOTSTRAP_SKIP_ROOT_CHECK=1 \
   V2TUN_BOOTSTRAP_CURL="$FAKE_CURL" \
   V2TUN_TEST_INSTALLER="$INSTALLER_FIXTURE" \
@@ -50,5 +52,6 @@ grep -qx 'repo=V2grop/backhaul-oneclick' "$LOG"
 grep -qx 'ref=codex/v2quantum-go-v1' "$LOG"
 grep -qx 'mode=tun' "$LOG"
 grep -qx 'args=--source' "$LOG"
+grep -qx 'input=terminal-stays-open' "$LOG"
 
 echo "V2TUN final bootstrap tests passed"

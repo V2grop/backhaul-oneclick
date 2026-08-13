@@ -14,7 +14,7 @@ BIN="${1:-$PROJECT_DIR/bin/v2quantum}"
 MANAGER="$PROJECT_DIR/scripts/manager.sh"
 TMP_DIR="$(mktemp -d -t v2quantum-manager-test.XXXXXX)"
 
-"$MANAGER" --version | grep -qx 'v2quantum-manager 0.3.1'
+"$MANAGER" --version | grep -qx 'v2quantum-manager 0.3.2'
 
 cleanup() {
   if [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" && "$TMP_DIR" == /tmp/v2quantum-manager-test.* ]]; then
@@ -22,6 +22,23 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# The shell-manager tests exercise generated files and menu behavior. CI's
+# normal `make shell-test` supplies the real core; this small fallback keeps the
+# same tests runnable in a shell-only environment without a Go compiler.
+if [[ ! -x "$BIN" ]]; then
+  BIN="$TMP_DIR/v2quantum-fixture"
+  cat >"$BIN" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  keygen) printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
+  version) printf 'v2quantum-go 0.3.0\n' ;;
+  check) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod 755 "$BIN"
+fi
 
 run_manager() {
   local config_dir="$1" input="$2" output_file="${3:-/dev/null}" systemctl="${4:-/usr/bin/true}"
