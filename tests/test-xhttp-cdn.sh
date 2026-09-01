@@ -341,6 +341,7 @@ TRAFFIC_SCOPE=all
 write_unit "$TEST_DIR/client-all.service" client rev1 /etc/xhttp-cdn/client-rev1.json
 grep -Fq 'ExecStartPre=/opt/xhttp-cdn/bin/xray run -test -config /etc/xhttp-cdn/client-rev1.json' "$TEST_DIR/client-all.service" || fail 'Xray preflight is missing.'
 grep -Fq 'AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE' "$TEST_DIR/client-all.service" || fail 'TUN capabilities are missing.'
+grep -Fq 'AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW' "$TEST_DIR/client-all.service" || fail 'TUN socket interface capability is missing.'
 grep -Fq 'DeviceAllow=/dev/net/tun rw' "$TEST_DIR/client-all.service" || fail 'TUN device permission is missing.'
 
 SYSTEMD_DIR="$TEST_DIR/watchdog-systemd"

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-# Independent XHTTP/CDN direct forwarder.
+# Independent XHTTP/CDN endpoint and full-tunnel manager.
 #
 # This manager deliberately does not reuse or modify an existing Xray, X-UI,
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
@@ -65,6 +65,7 @@ TUN_NAME="${XHTTP_CDN_TUN_NAME:-xhttp0}"
 TUN_MTU="${XHTTP_CDN_TUN_MTU:-1500}"
 TUN_GATEWAY="${XHTTP_CDN_TUN_GATEWAY:-172.30.0.1/30}"
 TUN_DNS="${XHTTP_CDN_TUN_DNS:-1.1.1.1,8.8.8.8}"
+TUN_OUTBOUND_INTERFACE="${XHTTP_CDN_TUN_OUTBOUND_INTERFACE:-}"
 XMUX_MAX_CONCURRENCY="${XHTTP_CDN_XMUX_MAX_CONCURRENCY:-8-16}"
 XMUX_MAX_CONNECTIONS="${XHTTP_CDN_XMUX_MAX_CONNECTIONS:-0}"
 XMUX_C_MAX_REUSE_TIMES="${XHTTP_CDN_XMUX_C_MAX_REUSE_TIMES:-2-8}"
@@ -416,6 +417,30 @@ validate_tun_settings() {
   validate_dns_list "$TUN_DNS" || return 1
 }
 
+validate_tun_interface() {
+  [[ "${1:-}" == auto || "${1:-}" =~ ^[A-Za-z][A-Za-z0-9_.:-]{0,14}$ ]]
+}
+
+resolve_tun_outbound_interface() {
+  local candidate="${TUN_OUTBOUND_INTERFACE:-}"
+  if [[ -n "$candidate" ]]; then
+    validate_tun_interface "$candidate" || return 1
+    return 0
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    candidate="$(ip -4 route show default 2>/dev/null \
+      | awk 'NR == 1 {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}')"
+  fi
+  if validate_tun_interface "$candidate"; then
+    TUN_OUTBOUND_INTERFACE="$candidate"
+  else
+    # Xray's automatic updater remains a safe fallback on hosts where the
+    # default route is not visible during installation (for example a VPS
+    # network namespace). A detected fixed interface avoids route-update loops.
+    TUN_OUTBOUND_INTERFACE="auto"
+  fi
+}
+
 validate_cert_mode() {
   [[ "$1" == "letsencrypt" || "$1" == "self-signed" || "$1" == "existing" ]]
 }
@@ -691,6 +716,7 @@ TUN_NAME=${TUN_NAME:-xhttp0}
 TUN_MTU=${TUN_MTU:-1500}
 TUN_GATEWAY=${TUN_GATEWAY:-172.30.0.1/30}
 TUN_DNS=${TUN_DNS:-1.1.1.1,8.8.8.8}
+TUN_OUTBOUND_INTERFACE=${TUN_OUTBOUND_INTERFACE:-auto}
 MAPPINGS=${mappings}
 CERT_MODE=${CERT_MODE:-self-signed}
 TLS_CERT=${TLS_CERT:-}
@@ -860,7 +886,7 @@ load_server_pairing_values() {
   else
     TUNNEL_DIRECTION='direct'; TRAFFIC_SCOPE='ports'; EDGE_PORT=443
     SOCKS_PORT=10808; SOCKS_BIND=127.0.0.1; TUN_NAME=xhttp0; TUN_MTU=1500
-    TUN_GATEWAY=172.30.0.1/30; TUN_DNS='1.1.1.1,8.8.8.8'
+    TUN_GATEWAY=172.30.0.1/30; TUN_DNS='1.1.1.1,8.8.8.8'; TUN_OUTBOUND_INTERFACE=''
     CERT_MODE='self-signed'; TLS_CERT=''; TLS_KEY=''
     MAPPING_ITEMS=(); MAPPING_PROTOCOLS=(); MAPPING_LISTEN_PORTS=(); MAPPING_TARGET_PORTS=(); MAPPINGS=''
   fi
@@ -1330,6 +1356,7 @@ write_client_config() {
   fi
 
   if [[ "$scope" == tun || "$scope" == all ]]; then
+    resolve_tun_outbound_interface || die "Invalid TUN_OUTBOUND_INTERFACE."
     tag="xhttp-tun"
     dns_json='[]'
     local dns
@@ -1341,10 +1368,11 @@ write_client_config() {
       --arg tag "$tag" --arg name "${TUN_NAME:-xhttp0}" \
       --arg gateway "${TUN_GATEWAY:-172.30.0.1/30}" \
       --argjson mtu "$mtu_json" --argjson dns "$dns_json" \
+      --arg tun_interface "${TUN_OUTBOUND_INTERFACE:-auto}" \
       '. + [{tag:$tag, port:0, protocol:"tun", settings:{
         name:$name, desc:"XHTTP CDN full tunnel", mtu:$mtu, gateway:[$gateway],
         dns:$dns, userLevel:0, autoSystemRoutingTable:["0.0.0.0/0"],
-        autoOutboundsInterface:"auto"}}]' <<<"$inbounds")"
+        autoOutboundsInterface:$tun_interface}}]' <<<"$inbounds")"
     tags="$(jq -c --arg tag "$tag" '. + [$tag]' <<<"$tags")"
   fi
 
@@ -1411,7 +1439,9 @@ write_unit() {
   local destination="$1" role="$2" name="$3" config="$4"
   local capabilities='CAP_NET_BIND_SERVICE' device_allow='' address_families='AF_INET AF_INET6 AF_UNIX'
   if [[ "$role" == client && ("${TRAFFIC_SCOPE:-ports}" == tun || "${TRAFFIC_SCOPE:-ports}" == all) ]]; then
-    capabilities='CAP_NET_ADMIN CAP_NET_BIND_SERVICE'
+    # CAP_NET_ADMIN creates the TUN/routes; CAP_NET_RAW keeps SO_BINDTODEVICE
+    # usable on kernels where CAP_NET_ADMIN alone is insufficient.
+    capabilities='CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW'
     device_allow='DeviceAllow=/dev/net/tun rw'
     address_families+=' AF_NETLINK'
   fi
@@ -1612,6 +1642,7 @@ validate_client_values() {
   fi
   if [[ "$TRAFFIC_SCOPE" == tun || "$TRAFFIC_SCOPE" == all ]]; then
     validate_tun_settings || die "Invalid TUN settings."
+    resolve_tun_outbound_interface || die "Invalid TUN_OUTBOUND_INTERFACE."
   fi
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
     ((${#MAPPING_ITEMS[@]} > 0)) || die "At least one port mapping is required for the ports/all profile."
@@ -1657,6 +1688,20 @@ restore_instance_state() {
   for path in "$WATCHDOG_SERVICE" "$WATCHDOG_TIMER"; do
     restore_snapshot "${snapshot_dir}/$(basename "$path")" "$path"
   done
+}
+
+rollback_failed_install() {
+  local role="$1" name="$2" snapshot_dir="$3"
+  # Keep every failure path recoverable, including a non-zero systemctl
+  # enable/restart.  With `set -e`, those commands must be guarded explicitly
+  # or the shell would exit before restoring the previous instance files.
+  restore_instance_state "$role" "$name" "$snapshot_dir" || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if [[ "$role" == server ]] && command -v nginx >/dev/null 2>&1; then
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 enable_instance_watchdog() {
@@ -1719,16 +1764,27 @@ install_server_values() {
     watchdog_paths "$SERVICE"
     rm -f -- "$WATCHDOG_SERVICE" "$WATCHDOG_TIMER"
   fi
-  systemctl daemon-reload
-  systemctl enable "$SERVICE" >/dev/null
-  systemctl restart "$SERVICE"
-  systemctl reload nginx 2>/dev/null || systemctl restart nginx
+  if ! systemctl daemon-reload; then
+    rollback_failed_install server "$INSTANCE" "$snapshot_dir"
+    die "systemd could not reload after the XHTTP CDN change; the previous state was restored."
+  fi
+  if ! systemctl enable "$SERVICE" >/dev/null; then
+    rollback_failed_install server "$INSTANCE" "$snapshot_dir"
+    die "Could not enable the XHTTP CDN server service; the previous state was restored."
+  fi
+  if ! systemctl restart "$SERVICE"; then
+    journalctl -u "$SERVICE" -n 80 --no-pager -o cat || true
+    rollback_failed_install server "$INSTANCE" "$snapshot_dir"
+    die "The XHTTP CDN server service could not restart; the previous state was restored."
+  fi
+  if ! (systemctl reload nginx 2>/dev/null || systemctl restart nginx); then
+    rollback_failed_install server "$INSTANCE" "$snapshot_dir"
+    die "Nginx could not reload after the XHTTP CDN change; the previous state was restored."
+  fi
   sleep 1
   if ! systemctl is-active --quiet "$SERVICE"; then
     journalctl -u "$SERVICE" -n 80 --no-pager -o cat || true
-    restore_instance_state server "$INSTANCE" "$snapshot_dir"
-    systemctl daemon-reload || true
-    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+    rollback_failed_install server "$INSTANCE" "$snapshot_dir"
     die "The XHTTP CDN server service did not become active; the previous state was restored."
   fi
   enable_instance_watchdog "$SERVICE"
@@ -1814,14 +1870,23 @@ install_client_values() {
     rm -f -- "$WATCHDOG_SERVICE" "$WATCHDOG_TIMER"
   fi
   ensure_tun_device
-  systemctl daemon-reload
-  systemctl enable "$SERVICE" >/dev/null
-  systemctl restart "$SERVICE"
+  if ! systemctl daemon-reload; then
+    rollback_failed_install client "$INSTANCE" "$snapshot_dir"
+    die "systemd could not reload after the XHTTP CDN change; the previous state was restored."
+  fi
+  if ! systemctl enable "$SERVICE" >/dev/null; then
+    rollback_failed_install client "$INSTANCE" "$snapshot_dir"
+    die "Could not enable the XHTTP CDN client service; the previous state was restored."
+  fi
+  if ! systemctl restart "$SERVICE"; then
+    journalctl -u "$SERVICE" -n 80 --no-pager -o cat || true
+    rollback_failed_install client "$INSTANCE" "$snapshot_dir"
+    die "The XHTTP CDN client service could not restart; the previous state was restored."
+  fi
   sleep 1
   if ! systemctl is-active --quiet "$SERVICE"; then
     journalctl -u "$SERVICE" -n 80 --no-pager -o cat || true
-    restore_instance_state client "$INSTANCE" "$snapshot_dir"
-    systemctl daemon-reload || true
+    rollback_failed_install client "$INSTANCE" "$snapshot_dir"
     die "The XHTTP CDN client service did not become active; the previous state was restored."
   fi
   enable_instance_watchdog "$SERVICE"
@@ -1845,6 +1910,7 @@ reset_profile_defaults() {
   TUN_MTU="${XHTTP_CDN_TUN_MTU:-1500}"
   TUN_GATEWAY="${XHTTP_CDN_TUN_GATEWAY:-172.30.0.1/30}"
   TUN_DNS="${XHTTP_CDN_TUN_DNS:-1.1.1.1,8.8.8.8}"
+  TUN_OUTBOUND_INTERFACE="${XHTTP_CDN_TUN_OUTBOUND_INTERFACE:-}"
   MAPPING_ITEMS=(); MAPPING_PROTOCOLS=(); MAPPING_LISTEN_PORTS=(); MAPPING_TARGET_PORTS=(); MAPPINGS=''
 }
 

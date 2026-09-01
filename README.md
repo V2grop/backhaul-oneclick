@@ -81,6 +81,12 @@ The profile selector is intentionally short:
 | `tun` | Full IPv4 packet tunnel on a named TUN (`TUN_NAME`, `TUN_GATEWAY`, `TUN_MTU`, `TUN_DNS`) |
 | `all` | All three inbounds at once |
 
+For `tun`/`all`, the installer automatically detects the peer's physical
+default-route interface for `autoOutboundsInterface` so the Xray control
+connection does not get caught by its own full-tunnel route. If a provider
+uses a nonstandard network namespace, set `XHTTP_CDN_TUN_OUTBOUND_INTERFACE`
+to that interface name; leaving it empty keeps Xray's `auto` fallback.
+
 `EDGE_PORT` defaults to 443 and accepts Cloudflare's proxied ports
 `2053,2083,2087,2096,8443` as well. Native XHTTP XMUX is used in
 `xhttpSettings.extra`; the legacy top-level `mux` field is not used. Every
