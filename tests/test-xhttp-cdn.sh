@@ -323,6 +323,17 @@ parse_setup_code "$xhc2_code" || fail 'XHC2 setup code could not be parsed.'
 [[ "$(serialize_mappings)" == 'tcp:2444=8444,udp:5353=53,both:8443=8443' ]] \
   || fail 'XHC2 mappings mismatch.'
 
+# A provider-specific edge port carried by a trusted XHC2 code must remain
+# usable on the peer without requiring a hidden second environment flag.
+EDGE_PORT=80
+custom_edge_code="$(make_setup_code_v2)"
+parse_setup_code "$custom_edge_code" || fail 'Custom encoded edge port was rejected.'
+CLEAN_IP=104.16.1.1
+BIND_ADDRESS=0.0.0.0
+TARGET_HOST=127.0.0.1
+validate_client_values || fail 'Peer validation rejected a custom encoded edge port.'
+EDGE_PORT=8443
+
 # Generate every inbound in the all profile and validate it with the official
 # Xray binary when the test runner provides one.
 CLEAN_IP=104.16.1.1

@@ -428,17 +428,24 @@ resolve_tun_outbound_interface() {
     return 0
   fi
   if command -v ip >/dev/null 2>&1; then
-    candidate="$(ip -4 route show default 2>/dev/null \
-      | awk 'NR == 1 {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}')"
+    # A previous XHTTP full-tunnel instance may itself own the lowest-metric
+    # default route. Skip our managed TUN names and select the next physical
+    # interface instead of binding a new control connection back into that TUN.
+    while IFS= read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      [[ "$candidate" == "${TUN_NAME:-xhttp0}" ]] && continue
+      [[ "$candidate" =~ ^xhttp[[:alnum:]_-]*$ ]] && continue
+      if validate_tun_interface "$candidate"; then
+        TUN_OUTBOUND_INTERFACE="$candidate"
+        return 0
+      fi
+    done < <(ip -4 route show default 2>/dev/null \
+      | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); break}}')
   fi
-  if validate_tun_interface "$candidate"; then
-    TUN_OUTBOUND_INTERFACE="$candidate"
-  else
-    # Xray's automatic updater remains a safe fallback on hosts where the
-    # default route is not visible during installation (for example a VPS
-    # network namespace). A detected fixed interface avoids route-update loops.
-    TUN_OUTBOUND_INTERFACE="auto"
-  fi
+  # Xray's automatic updater remains a safe fallback on hosts where the
+  # default route is not visible during installation (for example a VPS
+  # network namespace). A detected fixed interface avoids route-update loops.
+  TUN_OUTBOUND_INTERFACE="auto"
 }
 
 validate_cert_mode() {
@@ -1628,7 +1635,12 @@ validate_client_values() {
   validate_mode "$XHTTP_MODE" || die "XHTTP mode must be auto or packet-up."
   validate_tunnel_direction "$TUNNEL_DIRECTION" || die "TUNNEL_DIRECTION must be direct or reverse."
   validate_traffic_scope "$TRAFFIC_SCOPE" || die "TRAFFIC_SCOPE must be ports, socks, tun or all."
-  validate_edge_port "$EDGE_PORT" || die "EDGE_PORT is not a Cloudflare proxied port."
+  if ! validate_edge_port "$EDGE_PORT"; then
+    # A pairing code may intentionally carry a provider-specific proxied port
+    # accepted by the endpoint. The endpoint still enforces the normal
+    # Cloudflare allow-list during interactive creation.
+    validate_port "$EDGE_PORT" || die "Invalid encoded EDGE_PORT."
+  fi
   validate_xmux_settings || die "Invalid native XHTTP XMUX range."
   validate_watchdog_settings || die "Invalid watchdog settings."
   validate_ipv4 "$CLEAN_IP" || die "Clean IP must be a valid Cloudflare IPv4 address."
@@ -1708,7 +1720,10 @@ enable_instance_watchdog() {
   local service="$1"
   [[ "$ENABLE_WATCHDOG" == 1 ]] || return 0
   write_watchdog_units "$service"
-  systemctl daemon-reload
+  if ! systemctl daemon-reload; then
+    warn "Could not reload systemd for the ${service} watchdog; the tunnel itself is still installed."
+    return 0
+  fi
   systemctl enable --now "${service}-watchdog.timer" >/dev/null 2>&1 || \
     warn "Could not enable watchdog timer for ${service}; the tunnel itself is still installed."
 }
@@ -1897,7 +1912,11 @@ install_client_values() {
   echo "Profile     : $TRAFFIC_SCOPE"
   print_client_route_summary
   echo
-  test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this clean IP is not currently reachable from this server."
+  if validate_edge_port "$EDGE_PORT"; then
+    test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this clean IP is not currently reachable from this server."
+  else
+    ALLOW_CUSTOM_EDGE_PORT=1 test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this custom edge port is not currently reachable from this server."
+  fi
 }
 
 reset_profile_defaults() {
