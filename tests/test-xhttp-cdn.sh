@@ -269,4 +269,97 @@ if [[ -n "${XRAY_TEST_BIN:-}" ]]; then
   "$XRAY_TEST_BIN" run -test -config "$TEST_DIR/client.json"
 fi
 
+# v2 profile/mapping coverage: TCP and UDP may share a local number, while a
+# duplicate protocol or a `both` collision must be rejected.
+parse_mappings 'tcp:2444=8444,udp:2444=8443,both:5353=53' \
+  || fail 'Protocol-aware mappings were rejected.'
+[[ "${MAPPING_PROTOCOLS[*]}" == 'tcp udp both' ]] || fail 'Mapping protocols were not preserved.'
+[[ "$(serialize_mappings)" == 'tcp:2444=8444,udp:2444=8443,both:5353=53' ]] \
+  || fail 'Canonical mapping serialization is wrong.'
+! parse_mappings 'tcp:2444=8444,tcp:2444=443' || fail 'Exact protocol collision accepted.'
+! parse_mappings 'both:5353=53,udp:5353=53' || fail '`both` protocol collision accepted.'
+! parse_mappings 'tcp:1=2,,udp:3=4' || fail 'Malformed comma mapping accepted.'
+
+validate_edge_port 443 || fail 'Cloudflare default edge port rejected.'
+validate_edge_port 8443 || fail 'Cloudflare alternate edge port rejected.'
+! validate_edge_port 80 || fail 'Unsupported edge port accepted.'
+ALLOW_CUSTOM_EDGE_PORT=1
+validate_edge_port 80 || fail 'Custom edge port override rejected.'
+ALLOW_CUSTOM_EDGE_PORT=0
+validate_direction reverse || fail 'Reverse direction rejected.'
+validate_scope all || fail 'All traffic scope rejected.'
+validate_tun_name xhttp0 || fail 'Valid TUN name rejected.'
+! validate_tun_name 0bad || fail 'Invalid TUN name accepted.'
+validate_tun_gateway 172.30.0.1/30 || fail 'Valid TUN gateway rejected.'
+validate_dns_list '1.1.1.1,8.8.8.8' || fail 'Valid DNS list rejected.'
+
+# Full XHC2 pairing round-trip, including reverse direction and every profile
+# field. The code is deliberately opaque so UUID/path values are not printed
+# into the normal prompts.
+INSTANCE=rev1
+DOMAIN=cdn.example.com
+UUID=123e4567-e89b-12d3-a456-426614174000
+XHTTP_PATH=/xhttp-abcdef123456
+XHTTP_MODE=auto
+EDGE_PORT=8443
+TUNNEL_DIRECTION=reverse
+TRAFFIC_SCOPE=all
+ORIGIN_PORT=18080
+SOCKS_PORT=10808
+SOCKS_BIND=127.0.0.1
+TUN_NAME=xhttp0
+TUN_MTU=1500
+TUN_GATEWAY=172.30.0.1/30
+TUN_DNS='1.1.1.1,8.8.8.8'
+parse_mappings 'tcp:2444=8444,udp:5353=53,both:8443=8443' || fail 'Full mapping setup failed.'
+xhc2_code="$(make_setup_code_v2)"
+[[ "$xhc2_code" == XHC2_* ]] || fail 'XHC2 prefix is missing.'
+DOMAIN=''; UUID=''; XHTTP_PATH=''; EDGE_PORT=''; TUNNEL_DIRECTION=''; TRAFFIC_SCOPE=''
+parse_setup_code "$xhc2_code" || fail 'XHC2 setup code could not be parsed.'
+[[ "$INSTANCE" == rev1 && "$TUNNEL_DIRECTION" == reverse && "$TRAFFIC_SCOPE" == all ]] \
+  || fail 'XHC2 direction/profile mismatch.'
+[[ "$EDGE_PORT" == 8443 && "$SOCKS_PORT" == 10808 && "$TUN_NAME" == xhttp0 ]] \
+  || fail 'XHC2 optional settings mismatch.'
+[[ "$(serialize_mappings)" == 'tcp:2444=8444,udp:5353=53,both:8443=8443' ]] \
+  || fail 'XHC2 mappings mismatch.'
+
+# Generate every inbound in the all profile and validate it with the official
+# Xray binary when the test runner provides one.
+CLEAN_IP=104.16.1.1
+BIND_ADDRESS=0.0.0.0
+TARGET_HOST=127.0.0.1
+write_client_config "$TEST_DIR/client-all.json"
+assert_jq "$TEST_DIR/client-all.json" '.inbounds | length == 5' 'All profile inbound count mismatch.'
+assert_jq "$TEST_DIR/client-all.json" '[.inbounds[].protocol] | index("socks") != null' 'SOCKS inbound missing from all profile.'
+assert_jq "$TEST_DIR/client-all.json" '[.inbounds[].protocol] | index("tun") != null' 'TUN inbound missing from all profile.'
+assert_jq "$TEST_DIR/client-all.json" '.inbounds[] | select(.protocol == "tun") | .settings.autoSystemRoutingTable == ["0.0.0.0/0"]' 'TUN default route missing.'
+assert_jq "$TEST_DIR/client-all.json" '.outbounds[0].streamSettings.xhttpSettings.extra.xmux.maxConcurrency == "8-16"' 'Native XMUX concurrency missing.'
+assert_jq "$TEST_DIR/client-all.json" '.outbounds[0].streamSettings.xhttpSettings.extra.xmux.maxConnections == 0' 'Native XMUX maxConnections mismatch.'
+assert_jq "$TEST_DIR/client-all.json" '(.outbounds[0] | has("mux")) | not' 'Legacy mux unexpectedly enabled.'
+
+TRAFFIC_SCOPE=all
+write_unit "$TEST_DIR/client-all.service" client rev1 /etc/xhttp-cdn/client-rev1.json
+grep -Fq 'ExecStartPre=/opt/xhttp-cdn/bin/xray run -test -config /etc/xhttp-cdn/client-rev1.json' "$TEST_DIR/client-all.service" || fail 'Xray preflight is missing.'
+grep -Fq 'AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE' "$TEST_DIR/client-all.service" || fail 'TUN capabilities are missing.'
+grep -Fq 'DeviceAllow=/dev/net/tun rw' "$TEST_DIR/client-all.service" || fail 'TUN device permission is missing.'
+
+SYSTEMD_DIR="$TEST_DIR/watchdog-systemd"
+mkdir -p "$SYSTEMD_DIR"
+WATCHDOG_INTERVAL=60
+write_watchdog_units xhttp-cdn-client-rev1
+grep -Fq 'OnUnitActiveSec=60s' "$SYSTEMD_DIR/xhttp-cdn-client-rev1-watchdog.timer" || fail 'Watchdog interval is wrong.'
+grep -Fq 'systemctl restart xhttp-cdn-client-rev1.service' "$SYSTEMD_DIR/xhttp-cdn-client-rev1-watchdog.service" || fail 'Watchdog restart action is missing.'
+
+EDGE_PORT=443
+TLS_CERT=/etc/ssl/cloudflare/cdn.example.com.pem
+TLS_KEY=/etc/ssl/cloudflare/cdn.example.com.key
+write_nginx_config "$TEST_DIR/nginx-buffering.conf"
+grep -Fq 'proxy_buffering off;' "$TEST_DIR/nginx-buffering.conf" || fail 'Nginx proxy buffering is enabled.'
+grep -Fq 'proxy_request_buffering off;' "$TEST_DIR/nginx-buffering.conf" || fail 'Nginx request buffering is enabled.'
+grep -Fq 'grpc_buffer_size 16k;' "$TEST_DIR/nginx-buffering.conf" || fail 'Nginx gRPC buffer tuning is missing.'
+
+if [[ -n "${XRAY_TEST_BIN:-}" ]]; then
+  "$XRAY_TEST_BIN" run -test -config "$TEST_DIR/client-all.json"
+fi
+
 printf '[PASS] Independent XHTTP CDN configuration tests passed.\n'

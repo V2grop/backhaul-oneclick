@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 027
 
 # Universal launcher only. Each tunnel engine keeps its own files and services.
-SCRIPT_VERSION="1.2.2"
+SCRIPT_VERSION="1.3.0"
 V2QUANTUM_MANAGER_REVISION="0.3.2"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
@@ -58,6 +58,7 @@ Usage:
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
   tunnel-manager --tun               Independent encrypted layer-3 TUN manager
   tunnel-manager --xhttp-cdn         Independent CDN XHTTP/Clean-IP manager
+  tunnel-manager --xhttp-reverse     Easy reverse XHTTP endpoint shortcut
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
   tunnel-manager --capabilities      Show engines and limitations
@@ -99,12 +100,11 @@ capabilities() {
    Optional direct layer-4 TCP/UDP port forwarding.
 
 5) XHTTP CDN (independent official Xray core)
-   Direct TCP port mappings from Iran through Cloudflare XHTTP. The client
-   connects to a user-supplied clean Cloudflare IPv4 while TLS SNI and HTTP
-   Host remain the proxied hostname. It supports automatic Let's Encrypt via
-   a restricted Cloudflare DNS token, automatic self-signed origin TLS, or an
-   existing certificate. It uses isolated files and services and never changes
-   an existing Xray, X-UI, Backhaul or V2Quantum transport.
+   Direct or reverse endpoint/peer tunnel through Cloudflare XHTTP. Profiles
+   are TCP/UDP/both port mappings, private SOCKS, full IPv4 TUN, or all at
+   once. Native XHTTP XMUX, clean-edge dialing, preflight validation,
+   watchdog recovery and rollback are included. Existing Xray, X-UI,
+   Backhaul and V2Quantum transports are never changed.
 
 Pengu and Dagger licensed binaries are not bundled or required by this
 launcher. Raw spoof/BIP works only when both the route and provider policy
@@ -206,7 +206,7 @@ run_xhttp_cdn() {
   echo "Independent Xray core, configs and services; existing transports are preserved."
   echo
   if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]]; then
-    "$XHTTP_CDN_MANAGER_COMMAND"
+    "$XHTTP_CDN_MANAGER_COMMAND" "$@"
     return
   fi
   script="$(download_script "$XHTTP_CDN_URL" xhttp-cdn)" || return 1
@@ -214,7 +214,7 @@ run_xhttp_cdn() {
     XHTTP_CDN_REPO="$REPO" \
     XHTTP_CDN_REF="$REF" \
     XHTTP_CDN_SELF_URL="$XHTTP_CDN_URL" \
-    bash "$script"
+    bash "$script" "$@"
 }
 
 backhaul_menu() {
@@ -308,7 +308,7 @@ show_status() {
       'backhaul-*.service' 'v2quantum@*.service' 'v2quantum-portmap@*.service' \
       'xhttp-cdn-*.service' 'realm.service' 2>/dev/null || true
     "$SYSTEMCTL_BIN" list-units --all --type=timer --no-legend --no-pager \
-      'backhaul-*.timer' 'v2quantum-watchdog@*.timer' 2>/dev/null || true
+      'backhaul-*.timer' 'v2quantum-watchdog@*.timer' 'xhttp-cdn-*-watchdog.timer' 2>/dev/null || true
   else
     warn "systemctl is unavailable."
   fi
@@ -332,7 +332,7 @@ show_status() {
   echo "================ Tunnel listeners ================"
   if command -v "$SS_BIN" >/dev/null 2>&1; then
     "$SS_BIN" -H -lntup 2>/dev/null \
-      | grep -Ei 'backhaul|v2quantum|realm' \
+      | grep -Ei 'backhaul|v2quantum|xray|xhttp|realm' \
       || echo "No process-tagged tunnel listener was found."
   else
     warn "ss is unavailable; install iproute2 for listener diagnostics."
@@ -379,10 +379,11 @@ menu() {
     echo "5) Install/update tunnel-manager shortcut"
     echo "6) Remove only the launcher shortcut"
     echo "7) Capabilities and important limitations"
-    echo "8) XHTTP CDN - independent Clean-IP direct forwarder"
+    echo "8) XHTTP CDN - direct/reverse profiles (ports/SOCKS/TUN/all)"
+    echo "9) XHTTP reverse endpoint shortcut"
     echo "0) Exit"
     echo
-    IFS= read -r -p "Choose [0-8]: " choice
+    IFS= read -r -p "Choose [0-9]: " choice
     case "${choice,,}" in
       1|backhaul) backhaul_menu ;;
       2|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
@@ -392,6 +393,7 @@ menu() {
       6|remove|uninstall) remove_shortcut; pause_menu ;;
       7|info|capabilities) capabilities; pause_menu ;;
       8|xhttp|xhttp-cdn|cdn) run_xhttp_cdn || warn "XHTTP CDN manager exited with an error."; pause_menu ;;
+      9|xhttp-reverse|reverse) run_xhttp_cdn reverse-server || warn "XHTTP reverse manager exited with an error."; pause_menu ;;
       0|q|quit|exit) exit 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -405,6 +407,7 @@ while (( $# > 0 )); do
     --v2quantum) ACTION="v2quantum" ;;
     --tun) ACTION="tun" ;;
     --xhttp-cdn) ACTION="xhttp-cdn" ;;
+    --xhttp-reverse) ACTION="xhttp-reverse" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
     --capabilities) ACTION="capabilities" ;;
@@ -427,6 +430,7 @@ case "$ACTION" in
   v2quantum) run_v2quantum ;;
   tun) run_v2tun ;;
   xhttp-cdn) run_xhttp_cdn ;;
+  xhttp-reverse) run_xhttp_cdn reverse-server ;;
   realm) run_realm ;;
   status) show_status ;;
   capabilities) capabilities ;;

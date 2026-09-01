@@ -21,7 +21,7 @@ duplicate top-level engines:
 | Backhaul | Existing `backhaul_premium` core | TCP, TCPMUX, XTCPMUX, WS, WSS, WSMUX, WSSMUX, XWSMUX and AnyTLS |
 | XWSMUX Max | Existing optimized Backhaul profile | Cloudflare XWSMUX, automatic Iran token, 15-second transport watchdog, staged recovery and rollback |
 | V2Quantum | Independent MIT-licensed Go core | TCP, adaptive Quantum v2 UDP with SACK/multi-parity FEC, experimental Raw ICMP spoof/BIP and separate encrypted L3 TUN |
-| XHTTP CDN | Isolated official Xray core | Iran-side TCP mappings over Cloudflare XHTTP, clean edge IPv4, automatic origin certificate, TLS SNI/Host, setup code and dedicated Nginx snippet |
+| XHTTP CDN | Isolated official Xray core | Direct or reverse endpoint/peer over Cloudflare XHTTP, TCP/UDP/both mappings, private SOCKS, full IPv4 TUN, native XMUX, clean edge IPv4, automatic origin certificate, pairing code and dedicated Nginx snippet |
 | Realm | External open-source Realm manager | TCP and UDP layer-4 port forwarding |
 
 The launcher itself, V2Quantum and Realm do not use Pengu or Dagger licensed
@@ -44,34 +44,58 @@ tunnel-manager --xwsmux-max
 tunnel-manager --v2quantum
 tunnel-manager --tun
 tunnel-manager --xhttp-cdn
+tunnel-manager --xhttp-reverse
 tunnel-manager --realm
 tunnel-manager --status
 ```
 
 The XHTTP CDN option is additive and isolated. It installs its own binary at
-`/opt/xhttp-cdn/bin/xray`, configurations under `/etc/xhttp-cdn`, services named
-`xhttp-cdn-*`, and a dedicated Nginx server block for an unused Cloudflare
-hostname. It does not edit `/etc/xray`, X-UI, Backhaul, V2Quantum, Realm, or an
-existing Nginx server block. On the Iran node the dial address is the selected
-clean Cloudflare IPv4, while TLS SNI and the XHTTP Host remain the proxied
-hostname. The normal foreign installer asks only for that hostname and creates
-the UUID, secret path, internal port, XHTTP mode, and a self-signed origin
-certificate automatically for Cloudflare `Full`. Optional Let's Encrypt and
-existing-certificate choices remain available through `advanced-server`.
-Only TCP port mappings are advertised by this first version.
+`/opt/xhttp-cdn/bin/xray`, configurations and metadata under `/etc/xhttp-cdn`,
+services named `xhttp-cdn-*`, watchdog timers, and a dedicated Nginx server
+block for an unused Cloudflare hostname. It does not edit `/etc/xray`, X-UI,
+Backhaul, V2Quantum, Realm, or an existing Nginx server block. The peer dials
+the selected `CLEAN_CLOUDFLARE_IP`, while TLS SNI and HTTP Host remain the
+proxied `CDN_HOSTNAME`.
 
-The simple menu uses option `1` for the one-question foreign installation,
-option `2` to show the Iran command again, and option `3` for numbered deletion
-with one confirmation. It does not ask users to type a role, instance name,
-UUID, path, internal port, or XHC1 code during the normal workflow.
+### XHTTP direct and reverse, with simple names
 
-For the normal Iran installation, manual setup-code entry is no longer needed.
-After the foreign endpoint starts, it prints one complete cache-busted command.
-Paste that whole command on the Iran server; the automatic workflow transfers
-the private XHTTP settings internally and asks only for
-`CLEAN_CLOUDFLARE_IP` and `IRAN_PORT=FOREIGN_SERVICE_PORT`. The command is also
-saved root-only and can always be rebuilt from the installed configuration by
-choosing menu option `2` or running `xhttp-cdn-manager iran-command`.
+There are two symmetric choices:
+
+| Model | Endpoint (runs Nginx/Xray server) | Peer (runs Xray client and user listeners) |
+|---|---|---|
+| Direct | Usually `FOREIGN_SERVER_IP` | Usually `IRAN_SERVER_IP` |
+| Reverse | Usually `IRAN_SERVER_IP` | Usually `FOREIGN_SERVER_IP` |
+
+On the endpoint's easy screen enter only `CDN_HOSTNAME`. It generates the UUID,
+secret `XHTTP_PATH`, private `ORIGIN_PORT`, certificate and native XHTTP XMUX.
+Copy the one complete pairing command to the peer. The peer normally asks only
+for `CLEAN_CLOUDFLARE_IP`; if the endpoint did not embed a mapping it asks for
+`LOCAL_PORT=REMOTE_TARGET_PORT` (for example `2444=8444`).
+
+The profile selector is intentionally short:
+
+| `TRAFFIC_SCOPE` | What is carried through the two-server XHTTP link |
+|---|---|
+| `ports` | TCP/UDP/both port mappings (`tcp:2444=8444,udp:5353=53`) |
+| `socks` | Private no-auth SOCKS listener (`SOCKS_BIND`/`SOCKS_PORT`) |
+| `tun` | Full IPv4 packet tunnel on a named TUN (`TUN_NAME`, `TUN_GATEWAY`, `TUN_MTU`, `TUN_DNS`) |
+| `all` | All three inbounds at once |
+
+`EDGE_PORT` defaults to 443 and accepts Cloudflare's proxied ports
+`2053,2083,2087,2096,8443` as well. Native XHTTP XMUX is used in
+`xhttpSettings.extra`; the legacy top-level `mux` field is not used. Every
+generated unit runs Xray's configuration preflight, and failed replacements
+restore the previous config/Nginx/metadata state. A small per-instance
+watchdog timer restarts a stopped service.
+
+The XHTTP menu uses option `1` for easy direct endpoint, `9` for easy reverse
+endpoint, `2` to rebuild the peer command, and `10` for advanced profiles. The
+CLI aliases are `peer-command`, `reverse-server`, `easy-reverse-client` and
+`watchdog`; `iran-command` remains a compatibility alias.
+
+For simultaneous direct and reverse links, create two instances with different
+`INSTANCE_NAME`, `CDN_HOSTNAME` and `XHTTP_PATH`; each instance has its own
+service, metadata and watchdog files.
 
 Every new V2Quantum/V2TUN tunnel receives a distinct name, JSON configuration,
 token file, systemd instance, health port and watchdog state. Creating a second
@@ -95,6 +119,16 @@ TUNNEL_MANAGER_REF=codex/v2quantum-go-v1 bash <(curl -fsSL --ipv4 "https://raw.g
 Choose `1) Backhaul family`, then `3) V2TUN`. The older
 `install-v2tun.sh` URL remains only as a backward-compatible helper and is no
 longer the recommended entry point.
+
+The XHTTP branch can be opened directly on either server with:
+
+```bash
+TUNNEL_MANAGER_REF=codex/v2quantum-go-v1 bash <(curl -fsSL --ipv4 "https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/oneclick-universal.sh?cb=$(date +%s)")
+```
+
+Choose `8) XHTTP CDN` for the profile menu or `9) XHTTP reverse endpoint` for
+the one-question reverse shortcut. The universal launcher forwards the choice
+to the isolated XHTTP manager without touching the other tunnel engines.
 
 The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
 as working. The menu's supported L3 option is the source-built V2TUN core; it
