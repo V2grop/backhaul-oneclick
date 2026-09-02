@@ -138,6 +138,45 @@ if grep -q '^outdated-manager-was-opened$' "$LOG"; then
   exit 1
 fi
 
+# The selected branch must also replace an older XHTTP menu, otherwise users
+# would keep seeing stale endpoint/peer numbers after rerunning the launcher.
+CURRENT_XHTTP_MANAGER="$TMP_DIR/current-xhttp-manager"
+cat >"$CURRENT_XHTTP_MANAGER" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "xhttp-cdn-manager 2.1.0"
+  exit 0
+fi
+echo 'current-xhttp-manager' >>"${TUNNEL_TEST_LOG:?}"
+EOF
+chmod 755 "$CURRENT_XHTTP_MANAGER"
+xhttp_download_count_before="$(grep -c '^xhttp$' "$LOG" || true)"
+env "${COMMON_ENV[@]}" TUNNEL_MANAGER_XHTTP_CDN_COMMAND="$CURRENT_XHTTP_MANAGER" \
+  bash "$LAUNCHER" --xhttp-cdn >/dev/null
+xhttp_download_count_after="$(grep -c '^xhttp$' "$LOG" || true)"
+test "$xhttp_download_count_after" -eq "$xhttp_download_count_before"
+grep -qx 'current-xhttp-manager' "$LOG"
+
+OUTDATED_XHTTP_MANAGER="$TMP_DIR/outdated-xhttp-manager"
+cat >"$OUTDATED_XHTTP_MANAGER" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "xhttp-cdn-manager 2.0.0"
+  exit 0
+fi
+echo 'outdated-xhttp-manager-was-opened' >>"${TUNNEL_TEST_LOG:?}"
+EOF
+chmod 755 "$OUTDATED_XHTTP_MANAGER"
+xhttp_download_count_before="$(grep -c '^xhttp$' "$LOG" || true)"
+env "${COMMON_ENV[@]}" TUNNEL_MANAGER_XHTTP_CDN_COMMAND="$OUTDATED_XHTTP_MANAGER" \
+  bash "$LAUNCHER" --xhttp-cdn >/dev/null
+xhttp_download_count_after="$(grep -c '^xhttp$' "$LOG" || true)"
+test "$xhttp_download_count_after" -eq "$((xhttp_download_count_before + 1))"
+if grep -q '^outdated-xhttp-manager-was-opened$' "$LOG"; then
+  echo "the launcher opened an outdated XHTTP manager" >&2
+  exit 1
+fi
+
 env "${COMMON_ENV[@]}" bash "$LAUNCHER" --xhttp-cdn >/dev/null
 printf 'y\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" --realm >/dev/null
 
@@ -169,7 +208,7 @@ printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
 grep -q '2) V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
 grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
-grep -q '8) XHTTP CDN - direct/reverse profiles (ports/SOCKS/TUN/all)' "$TMP_DIR/menu.txt"
+grep -q '8) XHTTP CDN - KHAREJ/IRAN direct + reverse (ports/SOCKS/TUN/all)' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2
   exit 1

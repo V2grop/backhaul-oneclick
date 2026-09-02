@@ -94,10 +94,20 @@ generated unit runs Xray's configuration preflight, and failed replacements
 restore the previous config/Nginx/metadata state. A small per-instance
 watchdog timer restarts a stopped service.
 
-The XHTTP menu uses option `1` for easy direct endpoint, `9` for easy reverse
-endpoint, `2` to rebuild the peer command, and `10` for advanced profiles. The
-CLI aliases are `peer-command`, `reverse-server`, `easy-reverse-client` and
-`watchdog`; `iran-command` remains a compatibility alias.
+The XHTTP menu is role-labelled so the two servers are not confused:
+
+```text
+DIRECT : 1) KHAREJ endpoint -> 2) IRAN peer
+REVERSE: 4) IRAN endpoint  -> 5) KHAREJ peer
+```
+
+Option `3` rebuilds the peer command on whichever server owns the endpoint;
+the peer item accepts either the complete printed command or only its `XHC1`/
+`XHC2` code. Option `11` opens advanced `ports`/`SOCKS`/`TUN`/`all` settings
+and option `12` shows the same Iran/KHAREJ map. The CLI aliases are
+`peer-command`, `iran-peer`, `kharej-peer`, `reverse-server`,
+`easy-reverse-client` and `watchdog`; `iran-command` remains a compatibility
+alias.
 
 For simultaneous direct and reverse links, create two instances with different
 `INSTANCE_NAME`, `CDN_HOSTNAME` and `XHTTP_PATH`; each instance has its own
@@ -132,9 +142,11 @@ The XHTTP branch can be opened directly on either server with:
 TUNNEL_MANAGER_REF=codex/v2quantum-go-v1 bash <(curl -fsSL --ipv4 "https://raw.githubusercontent.com/V2grop/backhaul-oneclick/codex/v2quantum-go-v1/oneclick-universal.sh?cb=$(date +%s)")
 ```
 
-Choose `8) XHTTP CDN` for the profile menu or `9) XHTTP reverse endpoint` for
-the one-question reverse shortcut. The universal launcher forwards the choice
-to the isolated XHTTP manager without touching the other tunnel engines.
+Choose `8) XHTTP CDN - KHAREJ/IRAN direct + reverse` for the role-labelled
+profile menu. The shortcut `9) XHTTP - IRAN reverse endpoint` opens the same
+manager directly on the Iran endpoint screen. The universal launcher forwards
+the choice to the isolated XHTTP manager without touching the other tunnel
+engines.
 
 The legacy TUN fields exposed by some opaque Backhaul builds are not advertised
 as working. The menu's supported L3 option is the source-built V2TUN core; it

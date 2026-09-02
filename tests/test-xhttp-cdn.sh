@@ -152,7 +152,7 @@ grep -Fq 'grpc_pass grpc://127.0.0.1:18080;' "$TEST_DIR/nginx.conf" || fail 'Ngi
 grep -Fq 'grpc_set_header CF-Connecting-IP $http_cf_connecting_ip;' "$TEST_DIR/nginx.conf" || fail 'Cloudflare client-IP forwarding missing.'
 
 # A command that scrolled off-screen must be rebuildable from an existing
-# foreign JSON/Nginx pair and stored root-only for menu option 2.
+# foreign JSON/Nginx pair and stored root-only for the endpoint command menu.
 (
   CONFIG_DIR="$TEST_DIR/recover/config"
   SYSTEMD_DIR="$TEST_DIR/recover/systemd"
@@ -175,7 +175,28 @@ grep -Fq 'grpc_set_header CF-Connecting-IP $http_cf_connecting_ip;' "$TEST_DIR/n
   [[ -s "$command_file" ]] || fail 'Recovered Iran command was not saved.'
   [[ "$(stat -c '%a' "$command_file")" == 600 ]] || fail 'Recovered Iran command is not root-only.'
   grep -Fq ' easy-client' "$command_file" || fail 'Recovered Iran command does not launch easy-client.'
-  grep -Fq 'choose menu option 2' "$TEST_DIR/recovered-command.txt" || fail 'Command recovery instructions are missing.'
+  grep -Fq 'choose menu option 3' "$TEST_DIR/recovered-command.txt" || fail 'Command recovery instructions are missing.'
+)
+
+# The role-labelled peer menu accepts either the bare opaque token or the
+# complete one-line command copied from the endpoint, without evaluating it.
+extracted_code="$(extract_setup_code "XHTTP_CDN_SETUP_CODE=${code} bash <(curl example) easy-client")" \
+  || fail 'Pairing code was not extracted from the complete command.'
+[[ "$extracted_code" == "$code" ]] || fail 'Extracted pairing code changed.'
+[[ "$(extract_setup_code "$code")" == "$code" ]] || fail 'Bare pairing code was not accepted.'
+! extract_setup_code 'echo no-pairing-code-here' || fail 'Random command was accepted as a pairing code.'
+
+# The interactive XHTTP menu must put the two roles next to the action they
+# need: direct KHAREJ -> IRAN and reverse IRAN -> KHAREJ.
+(
+  SKIP_ROOT_CHECK=1
+  printf '0\n' | main_menu >"$TEST_DIR/role-menu.txt"
+  grep -Fq '1) KHAREJ / خارج' "$TEST_DIR/role-menu.txt" || fail 'KHAREJ direct option is not labelled.'
+  grep -Fq '2) IRAN / ایران' "$TEST_DIR/role-menu.txt" || fail 'IRAN direct peer option is not labelled.'
+  grep -Fq '4) IRAN / ایران' "$TEST_DIR/role-menu.txt" || fail 'IRAN reverse endpoint option is not labelled.'
+  grep -Fq '5) KHAREJ / خارج' "$TEST_DIR/role-menu.txt" || fail 'KHAREJ reverse peer option is not labelled.'
+  grep -Fq 'DIRECT / مستقیم:  1) KHAREJ endpoint  ->  2) IRAN peer' "$TEST_DIR/role-menu.txt" \
+    || fail 'Direct role flow is not shown.'
 )
 
 # With a single installation, deletion must auto-select it and require no role

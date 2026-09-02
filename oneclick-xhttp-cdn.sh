@@ -8,7 +8,7 @@ umask 027
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
 # its own Xray binary, JSON configurations, units, and Nginx snippets.
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
 REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-main}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -163,8 +163,8 @@ confirm() {
 show_ip_names() {
   cat <<'EOF'
 IP names used by this installer / معنی نام آی‌پی‌ها:
-  FOREIGN_SERVER_IP       = آی‌پی عمومی سرور خارج
-  IRAN_SERVER_IP          = آی‌پی عمومی همین سرور ایران؛ کاربران به آن وصل می‌شوند
+  FOREIGN_SERVER_IP (KHAREJ_SERVER_IP) = آی‌پی عمومی سرور خارج
+  IRAN_SERVER_IP                       = آی‌پی عمومی سرور ایران؛ کاربران به آن وصل می‌شوند
   CLEAN_CLOUDFLARE_IP     = آی‌پی تمیز کلودفلر که فقط روی سرور PEER وارد می‌شود
 
 Important / مهم:
@@ -177,8 +177,9 @@ EOF
 show_server_install_guide() {
   cat <<'EOF'
 ============================================================
-EASY FOREIGN INSTALL / نصب آسان روی سرور خارج
+KHAREJ / خارج — EASY DIRECT ENDPOINT
 ============================================================
+این مرحله فقط روی سرور خارج اجرا می‌شود.
 Enter only CDN_HOSTNAME. Example: xhttp.example.com
 UUID, secret path, internal port, XHTTP mode and certificate are automatic.
 
@@ -188,14 +189,29 @@ EOF
   echo
 }
 
+show_advanced_server_install_guide() {
+  cat <<'EOF'
+============================================================
+ADVANCED ENDPOINT / endpoint پیشرفته (KHAREJ یا IRAN)
+============================================================
+این مرحله را روی سروری اجرا کن که می‌خواهی Endpoint باشد.
+در صفحهٔ بعد direction را انتخاب می‌کنی:
+  direct  = KHAREJ endpoint -> IRAN peer
+  reverse = IRAN endpoint -> KHAREJ peer
+پروفایل ports / socks / tun / all نیز در همین صفحه انتخاب می‌شود.
+EOF
+  echo
+}
+
 show_reverse_server_install_guide() {
   cat <<'EOF'
 ============================================================
-EASY REVERSE ENDPOINT / نصب آسان ریورس
+IRAN / ایران — EASY REVERSE ENDPOINT
 ============================================================
+این مرحله فقط روی سرور ایران اجرا می‌شود.
 Run this option on the server that owns the private service (normally IRAN).
 Enter only CDN_HOSTNAME. The endpoint listens locally and prints one complete
-peer command for the other server (normally FOREIGN). No UUID, path, or port
+peer command for the other server (normally KHAREJ). No UUID, path, or port
 mapping is required on this screen.
 
 Cloudflare A record: CDN_HOSTNAME -> this endpoint server (orange cloud ON)
@@ -207,16 +223,17 @@ EOF
 show_client_install_guide() {
   cat <<'EOF'
 ============================================================
-ADVANCED IRAN INSTALL / نصب دستی و پیشرفتهٔ ایران
+PEER INSTALL / نصب سمت مقابل (IRAN یا KHAREJ)
 ============================================================
-Run this option only on the IRAN server.
+این مرحله را روی سروری اجرا کن که عنوان آن در منو نوشته شده است.
 
-Normally, do not use this advanced command. Copy the WHOLE easy-install command printed by
-the FOREIGN server and paste it on Iran. It asks only the clean IP and mapping.
+برای حالت مستقیم، دستور را از KHAREJ بگیر و روی IRAN وارد کن.
+برای حالت ریورس، دستور را از IRAN بگیر و روی KHAREJ وارد کن.
+صفحهٔ ساده فقط CLEAN_CLOUDFLARE_IP و در صورت نیاز mapping را می‌پرسد.
 
 This manual screen needs:
   1. XHC2_PAIRING_CODE (or older XHC1_SETUP_CODE) copied from the XHTTP endpoint server.
-  2. CLEAN_CLOUDFLARE_IP reachable from this IRAN server.
+  2. CLEAN_CLOUDFLARE_IP reachable from this PEER server (IRAN in direct, KHAREJ in reverse).
   3. Port mapping in this exact format:
        IRAN_PORT=FOREIGN_SERVICE_PORT
      Example: 2444=8444
@@ -230,19 +247,28 @@ EOF
 }
 
 show_simple_guide() {
-  show_server_install_guide
   cat <<'EOF'
 ============================================================
-EASY IRAN INSTALL / نصب آسان روی سرور ایران
+XHTTP SETUP MAP / نقشهٔ خیلی سادهٔ ایران و خارج
 ============================================================
-On the FOREIGN server choose menu option 2 and copy the complete command.
-Paste it on the IRAN server. It asks only:
-  1. CLEAN_CLOUDFLARE_IP
-  2. PORT_MAPPING, example: 2444=8444
+DIRECT / مستقیم (پیشنهاد معمول):
+  1) روی KHAREJ گزینهٔ 1 را بزن و CDN_HOSTNAME را وارد کن.
+  2) روی IRAN گزینهٔ 2 را بزن.
+  3) دستور کامل چاپ‌شده در KHAREJ یا فقط کد XHC2 را paste کن.
+  4) روی IRAN فقط CLEAN_CLOUDFLARE_IP را وارد کن؛ mapping در صورت نیاز.
+
+REVERSE / ریورس:
+  1) روی IRAN گزینهٔ 4 را بزن و CDN_HOSTNAME را وارد کن.
+  2) روی KHAREJ گزینهٔ 5 را بزن.
+  3) دستور کامل چاپ‌شده در IRAN یا فقط کد XHC2 را paste کن.
+  4) روی KHAREJ فقط CLEAN_CLOUDFLARE_IP را وارد کن؛ mapping در صورت نیاز.
+
+اگر دستور از صفحه خارج شد، روی همان ENDPOINT گزینهٔ 3 را بزن تا دوباره ساخته شود.
+در منوی اصلی Universal ابتدا گزینهٔ 8 یعنی XHTTP را انتخاب کن.
 
 Simple example / مثال ساده:
-  Normal setup    : copy ONE complete command from foreign and paste on Iran
-  Iran asks only : CLEAN_CLOUDFLARE_IP and IRAN_PORT=FOREIGN_SERVICE_PORT
+  Normal setup    : KHAREJ option 1 -> IRAN option 2
+  Iran asks only  : CLEAN_CLOUDFLARE_IP and IRAN_PORT=FOREIGN_SERVICE_PORT
   Cloudflare DNS : xhttp.example.com -> FOREIGN_SERVER_IP (orange cloud ON)
   Iran mapping   : 2444=8444
   User connects  : IRAN_SERVER_IP:2444
@@ -254,11 +280,10 @@ Connection path:
 EOF
   cat <<'EOF'
 
-Reverse setup / مدل ریورس:
-  1. On the endpoint server choose EASY REVERSE ENDPOINT and enter CDN_HOSTNAME.
-  2. Copy the printed peer command to the other server.
-  3. The peer asks only CLEAN_CLOUDFLARE_IP (and a port mapping if no mapping
-     was embedded). Users then connect to the peer's public IP.
+Role names / اسم نقش‌ها:
+  KHAREJ = endpoint مستقیم، یا peer در مدل ریورس
+  IRAN   = peer مستقیم، یا endpoint در مدل ریورس
+  CLEAN_CLOUDFLARE_IP همیشه روی PEER وارد می‌شود، نه در DNS و نه به‌جای IP سرور.
 
 Profiles: ports = TCP/UDP mappings; socks = private SOCKS; tun = full IPv4;
 all = ports + SOCKS + TUN in one XHTTP connection.
@@ -912,14 +937,16 @@ load_server_pairing_values() {
 }
 
 print_iran_easy_command() {
-  local name="$1" command_file destination input_text
+  local name="$1" command_file destination input_text next_step
   load_server_pairing_values "$name"
   save_iran_easy_command
   command_file="$(iran_command_file "$INSTANCE")"
   if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    destination='FOREIGN SERVER / سرور خارج'
+    destination='KHAREJ / سرور خارج'
+    next_step='روی KHAREJ گزینهٔ 5 را بزن و همین دستور/کد را وارد کن.'
   else
-    destination='IRAN SERVER / سرور ایران'
+    destination='IRAN / سرور ایران'
+    next_step='روی IRAN گزینهٔ 2 را بزن و همین دستور/کد را وارد کن.'
   fi
   input_text='CLEAN_CLOUDFLARE_IP'
   if [[ ("$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all) && ${#MAPPING_ITEMS[@]} -eq 0 ]]; then
@@ -929,8 +956,9 @@ print_iran_easy_command() {
   printf '%sCOPY THIS ONE COMPLETE COMMAND TO THE %s:%s\n' "$C_BOLD" "$destination" "$C_RESET"
   cat "$command_file"
   echo
+  echo "NEXT STEP / مرحلهٔ بعد: ${next_step}"
   echo "On the peer it asks only: ${input_text}."
-  echo "If this screen is lost, choose menu option 2 to show the command again."
+  echo "If this screen is lost, run the manager on the ENDPOINT and choose menu option 3."
 }
 
 parse_setup_code() {
@@ -1806,6 +1834,11 @@ install_server_values() {
 
   ok "Independent XHTTP CDN endpoint is active."
   echo "Service      : $SERVICE"
+  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
+    echo "Server role  : IRAN / ایران (REVERSE endpoint)"
+  else
+    echo "Server role  : KHAREJ / خارج (DIRECT endpoint)"
+  fi
   echo "Xray origin  : 127.0.0.1:${ORIGIN_PORT}"
   echo "CDN hostname : $DOMAIN"
   echo "XHTTP path   : $XHTTP_PATH"
@@ -1908,6 +1941,11 @@ install_client_values() {
 
   ok "Independent XHTTP CDN peer tunnel is active."
   echo "Service     : $SERVICE"
+  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
+    echo "Server role : KHAREJ / خارج (REVERSE peer)"
+  else
+    echo "Server role : IRAN / ایران (DIRECT peer)"
+  fi
   echo "Direction   : ${TUNNEL_DIRECTION^^} peer"
   echo "Profile     : $TRAFFIC_SCOPE"
   print_client_route_summary
@@ -2045,15 +2083,15 @@ collect_server_advanced_values() {
 collect_client_values() {
   local setup_code mappings
   prompt_default "[1] INSTANCE_NAME (Enter is recommended)" "cf1" INSTANCE
-  prompt_required "[2] XHC2/XHC1_PAIRING_CODE copied from the endpoint server" setup_code
+  prompt_required "[2] XHC2/XHC1_PAIRING_CODE copied from the endpoint (KHAREJ or IRAN)" setup_code
   parse_setup_code "$setup_code" || die "Invalid or damaged XHC pairing code."
   # XHC2 carries the instance/profile itself. XHC1 keeps the operator's
   # explicitly selected name for backward compatibility.
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="${INSTANCE:-cf1}"
   if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    prompt_required "[3] CLEAN_CLOUDFLARE_IP (edge IPv4; not Iran IP, not foreign IP)" CLEAN_IP
+    prompt_required "[3] CLEAN_CLOUDFLARE_IP (روی KHAREJ؛ edge IPv4, not server IP)" CLEAN_IP
   else
-    prompt_required "[3] CLEAN_CLOUDFLARE_IP (edge IPv4; not Iran IP, not foreign IP)" CLEAN_IP
+    prompt_required "[3] CLEAN_CLOUDFLARE_IP (روی IRAN؛ edge IPv4, not server IP)" CLEAN_IP
   fi
   prompt_default "[4] PEER_BIND_ADDRESS (0.0.0.0 lets users reach this peer)" "0.0.0.0" BIND_ADDRESS
   prompt_default "[5] ENDPOINT_TARGET_HOST (usually 127.0.0.1)" "127.0.0.1" TARGET_HOST
@@ -2073,14 +2111,18 @@ collect_client_values() {
 
 collect_client_easy_values() {
   local setup_code="$1" mappings
-  [[ -n "$setup_code" ]] || die "The automatic Iran command is missing its private pairing data."
-  parse_setup_code "$setup_code" || die "The automatic Iran command is invalid or damaged. Copy the whole command again."
+  [[ -n "$setup_code" ]] || die "The automatic peer command is missing its private pairing data."
+  parse_setup_code "$setup_code" || die "The automatic peer command is invalid or damaged. Copy the whole command again."
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="cf1"
   BIND_ADDRESS="0.0.0.0"
   TARGET_HOST="127.0.0.1"
 
-  ok "Foreign settings received automatically; no setup code entry is needed."
-  prompt_required "[1] CLEAN_CLOUDFLARE_IP (not Iran IP, not foreign IP)" CLEAN_IP
+  ok "Endpoint settings received automatically; no setup code entry is needed."
+  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
+    prompt_required "[1] CLEAN_CLOUDFLARE_IP (روی KHAREJ؛ not Iran IP, not endpoint IP)" CLEAN_IP
+  else
+    prompt_required "[1] CLEAN_CLOUDFLARE_IP (روی IRAN؛ not Iran IP, not endpoint IP)" CLEAN_IP
+  fi
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
     if ((${#MAPPING_ITEMS[@]} == 0)); then
       echo
@@ -2110,7 +2152,7 @@ install_reverse_server_interactive() {
 }
 
 install_server_advanced_interactive() {
-  show_server_install_guide
+  show_advanced_server_install_guide
   collect_server_advanced_values
   prepare_install server
   install_server_values
@@ -2131,11 +2173,11 @@ install_client_easy_interactive() {
   fi
   logo
   if [[ "${TUNNEL_DIRECTION:-direct}" == reverse ]]; then
-    echo "EASY REVERSE PEER INSTALL / نصب آسان سمت مقابل ریورس"
+    echo "KHAREJ / خارج — EASY REVERSE PEER"
   else
-    echo "EASY IRAN INSTALL / نصب آسان ایران"
+    echo "IRAN / ایران — EASY DIRECT PEER"
   fi
-  echo "Private foreign settings are already inside the copied command."
+  echo "Private endpoint settings are already inside the copied command."
   echo
   collect_client_easy_values "$setup_code"
   prepare_install client
@@ -2145,6 +2187,42 @@ install_client_easy_interactive() {
 install_reverse_client_interactive() {
   local setup_code="${1:-${XHTTP_CDN_SETUP_CODE:-}}"
   [[ -n "$setup_code" ]] || die "Paste the complete reverse peer command or set XHTTP_CDN_SETUP_CODE."
+  install_client_easy_interactive "$setup_code"
+}
+
+# Extract only the opaque pairing token from either a bare XHC code or the
+# complete one-line command printed by an endpoint.  The command is never
+# evaluated; this keeps copy/paste convenient without executing pasted shell.
+extract_setup_code() {
+  local raw="${1:-}"
+  if [[ "$raw" =~ (XHC[12]_[A-Za-z0-9_-]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+install_peer_menu_interactive() {
+  local expected_direction="${1:-direct}" raw setup_code actual_direction actual_role expected_role
+  require_root
+  if [[ "$expected_direction" == reverse ]]; then
+    expected_role='KHAREJ / خارج'
+    prompt_required "KHAREJ / خارج — paste the complete command or XHC2 code from IRAN" raw
+  else
+    expected_role='IRAN / ایران'
+    prompt_required "IRAN / ایران — paste the complete command or XHC2 code from KHAREJ" raw
+  fi
+  setup_code="$(extract_setup_code "$raw")" || die "No XHC1/XHC2 pairing code was found. Paste the complete one-line command or the code only."
+  parse_setup_code "$setup_code" || die "The pasted XHTTP pairing code is invalid or damaged. Copy it again from the endpoint."
+  actual_direction="${TUNNEL_DIRECTION:-direct}"
+  if [[ "$actual_direction" != "$expected_direction" ]]; then
+    if [[ "$actual_direction" == reverse ]]; then
+      actual_role='KHAREJ / خارج'
+    else
+      actual_role='IRAN / ایران'
+    fi
+    die "This code is for ${actual_role} (direction: ${actual_direction}); use the ${expected_role} option with a ${expected_direction} endpoint code."
+  fi
   install_client_easy_interactive "$setup_code"
 }
 
@@ -2313,7 +2391,7 @@ update_manager() {
 }
 
 logo() {
-  printf '%s%sIndependent XHTTP CDN / Clean-IP Forwarder%s\n' "$C_CYAN" "$C_BOLD" "$C_RESET"
+  printf '%s%sIndependent XHTTP CDN / Endpoint + Peer Manager%s\n' "$C_CYAN" "$C_BOLD" "$C_RESET"
   printf 'Manager %s | isolated Xray %s\n\n' "$SCRIPT_VERSION" "$XRAY_VERSION"
 }
 
@@ -2322,38 +2400,45 @@ main_menu() {
   while true; do
     clear 2>/dev/null || true
     logo
-    echo "1) EASY DIRECT endpoint on FOREIGN server (asks only CDN_HOSTNAME)"
-    echo "2) Show/copy the PEER install command"
-    echo "3) Delete an XHTTP CDN installation"
-    echo "4) Show status"
-    echo "5) Test CLEAN_CLOUDFLARE_IP on the peer server"
-    echo "6) Update the isolated Xray core"
-    echo "7) Update this XHTTP CDN manager"
-    echo "8) Show the simple guide"
-    echo "9) EASY REVERSE endpoint (normally on IRAN; asks only CDN_HOSTNAME)"
-    echo "10) ADVANCED direct/reverse profile (ports/SOCKS/TUN/all)"
+    echo "DIRECT / مستقیم:  1) KHAREJ endpoint  ->  2) IRAN peer"
+    echo "REVERSE / ریورس:  4) IRAN endpoint   ->  5) KHAREJ peer"
+    echo
+    echo "1) KHAREJ / خارج — EASY DIRECT endpoint (فقط CDN_HOSTNAME)"
+    echo "2) IRAN / ایران — EASY DIRECT peer (دستور/کد از KHAREJ)"
+    echo "3) ENDPOINT — نمایش دوباره دستور نصب PEER"
+    echo "4) IRAN / ایران — EASY REVERSE endpoint (فقط CDN_HOSTNAME)"
+    echo "5) KHAREJ / خارج — EASY REVERSE peer (دستور/کد از IRAN)"
+    echo "6) حذف نصب XHTTP"
+    echo "7) وضعیت نصب‌ها"
+    echo "8) تست CLEAN_CLOUDFLARE_IP روی PEER"
+    echo "9) بروزرسانی Xray جداگانه"
+    echo "10) بروزرسانی همین XHTTP Manager"
+    echo "11) ADVANCED direct/reverse profile (ports/SOCKS/TUN/all)"
+    echo "12) راهنمای سادهٔ IRAN / KHAREJ"
     echo "0) Return/exit"
     echo
-    IFS= read -r -p "Choose [0-10]: " choice
+    IFS= read -r -p "Choose [0-12]: " choice
     case "$choice" in
       1) install_server_interactive; pause_menu ;;
-      2) show_iran_command_interactive; pause_menu ;;
-      3) remove_instance_interactive; pause_menu ;;
-      4) list_instances; pause_menu ;;
-      5)
+      2) install_peer_menu_interactive direct; pause_menu ;;
+      3) show_iran_command_interactive; pause_menu ;;
+      4) install_reverse_server_interactive; pause_menu ;;
+      5) install_peer_menu_interactive reverse; pause_menu ;;
+      6) remove_instance_interactive; pause_menu ;;
+      7) list_instances; pause_menu ;;
+      8)
         ensure_dependencies client
-        echo "Run this test on the IRAN server."
+        echo "Run this test on the PEER server (IRAN for direct, KHAREJ for reverse)."
         prompt_required "CDN_HOSTNAME (example: xhttp.example.com)" domain
         prompt_required "CLEAN_CLOUDFLARE_IP (not Iran IP, not foreign IP)" ip
         prompt_default "EDGE_PORT" "443" edge_port
         test_clean_ip "${domain,,}" "$ip" "$edge_port" || true
         pause_menu
         ;;
-      6) update_core; pause_menu ;;
-      7) update_manager; pause_menu ;;
-      8) show_simple_guide; echo; cloudflare_checklist; pause_menu ;;
-      9) install_reverse_server_interactive; pause_menu ;;
-      10) install_server_advanced_interactive; pause_menu ;;
+      9) update_core; pause_menu ;;
+      10) update_manager; pause_menu ;;
+      11) install_server_advanced_interactive; pause_menu ;;
+      12) show_simple_guide; echo; cloudflare_checklist; pause_menu ;;
       0|q|quit|exit) return 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -2377,10 +2462,16 @@ Usage:
   xhttp-cdn-manager guide           Show the easy two-step setup guide
   xhttp-cdn-manager easy-client     Automatic Iran install from the foreign command
   xhttp-cdn-manager easy-reverse-client  Automatic reverse peer install
+  xhttp-cdn-manager iran-peer       Interactive KHAREJ -> IRAN peer setup
+  xhttp-cdn-manager kharej-peer     Interactive IRAN -> KHAREJ peer setup
   xhttp-cdn-manager advanced-server Show direct/reverse ports/SOCKS/TUN/all settings
   xhttp-cdn-manager advanced-client Manual peer install with an XHC1/XHC2 code
   xhttp-cdn-manager watchdog SERVICE Run one health check/restart
   xhttp-cdn-manager --version
+
+  Menu roles are explicit: direct is KHAREJ endpoint -> IRAN peer; reverse is
+  IRAN endpoint -> KHAREJ peer. Paste a complete endpoint command or only its
+  XHC1/XHC2 code into the matching peer menu item; pasted shell is never run.
 
 The interactive installer creates either a direct or reverse XHTTP endpoint.
 Its peer supports TCP/UDP/both port mappings, private SOCKS, full IPv4 TUN, or
@@ -2397,6 +2488,8 @@ main() {
     menu) require_root; main_menu ;;
     status) require_root; list_instances ;;
     iran-command|peer-command) [[ $# -le 2 ]] || { usage >&2; exit 2; }; show_iran_command_interactive "${2:-}" ;;
+    iran-peer|direct-client-menu) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; install_peer_menu_interactive direct ;;
+    kharej-peer|reverse-client-menu) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; install_peer_menu_interactive reverse ;;
     remove) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; remove_instance_interactive ;;
     test-edge)
       [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }

@@ -5,6 +5,7 @@ umask 027
 # Universal launcher only. Each tunnel engine keeps its own files and services.
 SCRIPT_VERSION="1.3.0"
 V2QUANTUM_MANAGER_REVISION="0.3.2"
+XHTTP_CDN_MANAGER_REVISION="2.1.0"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -202,12 +203,18 @@ run_xwsmux_max() {
 run_xhttp_cdn() {
   local script
   echo
-  printf '%sXHTTP CDN / Clean-IP manager%s\n' "$cyan" "$reset"
+  printf '%sXHTTP CDN / KHAREJ + IRAN Endpoint/Peer manager%s\n' "$cyan" "$reset"
+  echo "Direct: KHAREJ endpoint -> IRAN peer | Reverse: IRAN endpoint -> KHAREJ peer"
   echo "Independent Xray core, configs and services; existing transports are preserved."
   echo
-  if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]]; then
+  if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]] && \
+     [[ "$("$XHTTP_CDN_MANAGER_COMMAND" --version 2>/dev/null || true)" == \
+        "xhttp-cdn-manager $XHTTP_CDN_MANAGER_REVISION" ]]; then
     "$XHTTP_CDN_MANAGER_COMMAND" "$@"
     return
+  fi
+  if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]]; then
+    warn "Installed XHTTP manager is outdated; updating it from $REF first."
   fi
   script="$(download_script "$XHTTP_CDN_URL" xhttp-cdn)" || return 1
   env \
@@ -379,8 +386,8 @@ menu() {
     echo "5) Install/update tunnel-manager shortcut"
     echo "6) Remove only the launcher shortcut"
     echo "7) Capabilities and important limitations"
-    echo "8) XHTTP CDN - direct/reverse profiles (ports/SOCKS/TUN/all)"
-    echo "9) XHTTP reverse endpoint shortcut"
+    echo "8) XHTTP CDN - KHAREJ/IRAN direct + reverse (ports/SOCKS/TUN/all)"
+    echo "9) XHTTP - IRAN reverse endpoint shortcut"
     echo "0) Exit"
     echo
     IFS= read -r -p "Choose [0-9]: " choice
