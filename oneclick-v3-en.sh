@@ -488,6 +488,23 @@ OzsKICAgIGhlbHB8LWh8LS1oZWxwKSB1c2FnZSA7OwogICAgKikgZGllICJVbmtub3duIGNvbW1h
 bmQuIFJ1biB3aXRob3V0IGFyZ3VtZW50cyB0byBvcGVuIHRoZSBtZW51LiIgOzsKICBlc2FjCn0K
 Cm1haW4gIiRAIgo=
 BACKHAUL_MANAGER_V312_EN_BASE64
+
+# Keep the proven layer-4 Backhaul logic unchanged, but hide the legacy TUN
+# profile because that opaque v1.4.0 binary does not reliably implement it.
+# V2TUN in oneclick-universal.sh is the supported layer-3 replacement. Also
+# normalize destructive confirmations so a lowercase y is sufficient.
+sed -i \
+  -e '/^# Supports:/ s/, tun$//' \
+  -e '/^  echo "10) tun"$/d' \
+  -e 's/Select transport \[1-10\]/Select transport [1-9]/' \
+  -e '/^    10|tun) TRANSPORT="tun" ;;$/d' \
+  -e 's/|anytls|tun)/|anytls)/' \
+  -e 's/Remove ${SEL_SERVICE}? Type YES to confirm:/Remove ${SEL_SERVICE}? [y\/N]:/' \
+  -e 's/if \[\[ "$confirm" == "YES" \]\]; then/confirm="${confirm,,}"; if [[ "$confirm" == "y" || "$confirm" == "yes" ]]; then/' \
+  -e 's@          rm -f "$SEL_UNIT" "$f"@          rm -f "$SEL_UNIT" "$f"\n          rm -f -- "${SEL_UNIT}.bak-"* "${f}.bak-"* 2>/dev/null || true@' \
+  -e 's/Type REMOVE to confirm complete removal:/Continue with complete removal? [y\/N]:/' \
+  -e 's/\[\[ "$confirm" == "REMOVE" \]\] || return/confirm="${confirm,,}"; [[ "$confirm" == "y" || "$confirm" == "yes" ]] || return/' \
+  "$MANAGER_PATH"
 chmod 700 "$MANAGER_PATH"
 
 bash -n "$MANAGER_PATH" || fail "Manager syntax validation failed."

@@ -1,0 +1,13 @@
+[Unit]
+Description=Check V2Quantum health every minute (%i)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+RandomizedDelaySec=10s
+AccuracySec=5s
+Persistent=true
+Unit=v2quantum-watchdog@%i.service
+
+[Install]
+WantedBy=timers.target

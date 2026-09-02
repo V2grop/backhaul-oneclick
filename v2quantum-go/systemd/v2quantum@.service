@@ -1,0 +1,33 @@
+[Unit]
+Description=V2Quantum independent reverse tunnel (%i)
+Documentation=https://github.com/V2grop/backhaul-oneclick
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/v2quantum/%i.env
+ExecStart=/usr/local/bin/v2quantum run -config /etc/v2quantum/%i.json
+ExecStartPre=/usr/local/bin/v2quantum check -config /etc/v2quantum/%i.json
+Restart=always
+RestartSec=2s
+TimeoutStopSec=10s
+KillSignal=SIGTERM
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
