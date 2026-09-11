@@ -8,9 +8,23 @@ umask 027
 # Backhaul, V2Quantum, Realm, Nginx server block, or systemd service.  It keeps
 # its own Xray binary, JSON configurations, units, and Nginx snippets.
 
-SCRIPT_VERSION="2.1.0"
+if [[ "${BASH_SOURCE[0]}" == "$0" && "$0" == /dev/fd/* ]]; then
+  bootstrap_file="$(mktemp /tmp/xhttp-bootstrap.XXXXXX)"
+  # The pipe is now positioned after this block. Restore the runtime prelude.
+  printf '#!/usr/bin/env bash\nset -Eeuo pipefail\numask 027\n' >"$bootstrap_file"
+  if ! cat "$0" >>"$bootstrap_file" || ! bash -n "$bootstrap_file"; then
+    rm -f -- "$bootstrap_file"
+    printf '[ERROR] Could not save the downloaded manager.\n' >&2
+    exit 1
+  fi
+  trap 'rm -f -- "$bootstrap_file"' EXIT
+  bash "$bootstrap_file" "$@"
+  exit $?
+fi
+
+SCRIPT_VERSION="3.0.0"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
-REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-main}}"
+REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-codex/v2quantum-go-v1}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
 SELF_URL="${XHTTP_CDN_SELF_URL:-${RAW_BASE}/oneclick-xhttp-cdn.sh}"
 SOURCE_STATE="${XHTTP_CDN_SOURCE_STATE:-/etc/xhttp-cdn/source.env}"
@@ -32,7 +46,7 @@ if [[ -z "${XHTTP_CDN_REPO+x}" && -z "${XHTTP_CDN_REF+x}" && -r "$SOURCE_STATE" 
   unset stored_repo stored_ref stored_self_url
 fi
 
-XRAY_VERSION="${XHTTP_CDN_XRAY_VERSION:-v26.7.28}"
+XRAY_VERSION="${XHTTP_CDN_XRAY_VERSION:-v26.9.9}"
 XRAY_REPO="${XHTTP_CDN_XRAY_REPO:-XTLS/Xray-core}"
 BASE_DIR="${XHTTP_CDN_BASE_DIR:-/opt/xhttp-cdn}"
 BIN_DIR="${XHTTP_CDN_BIN_DIR:-${BASE_DIR}/bin}"
@@ -140,7 +154,7 @@ prompt_default() {
 prompt_required() {
   local prompt="$1" out_var="$2" value
   while true; do
-    IFS= read -r -p "${prompt}: " value
+    IFS= read -r -p "${prompt}: " value || die "Input ended. Run the manager in an interactive terminal."
     if [[ -n "$value" ]]; then
       printf -v "$out_var" '%s' "$value"
       return 0
@@ -162,131 +176,63 @@ confirm() {
 
 show_ip_names() {
   cat <<'EOF'
-IP names used by this installer / معنی نام آی‌پی‌ها:
-  FOREIGN_SERVER_IP (KHAREJ_SERVER_IP) = آی‌پی عمومی سرور خارج
-  IRAN_SERVER_IP                       = آی‌پی عمومی سرور ایران؛ کاربران به آن وصل می‌شوند
-  CLEAN_CLOUDFLARE_IP     = آی‌پی تمیز کلودفلر که فقط روی سرور PEER وارد می‌شود
-
-Important / مهم:
-  - Cloudflare DNS: CDN_HOSTNAME -> XHTTP_ENDPOINT_SERVER with Proxy ON (orange cloud).
-  - Do not put the peer IP or CLEAN_CLOUDFLARE_IP in that DNS record.
-  - The peer public IP stays DNS-only/direct; only the endpoint is proxied.
+FOREIGN_SERVER_IP = public IP of the Foreign server (runs the XHTTP endpoint).
+IRAN_SERVER_IP    = public IP users connect to (runs the XHTTP client).
+CLEAN_CLOUDFLARE_IP = reachable Cloudflare edge IP, entered on Iran only.
+DNS: CDN_HOSTNAME -> FOREIGN_SERVER_IP, with Cloudflare Proxy ON.
+Do not enter FOREIGN_SERVER_IP as CLEAN_CLOUDFLARE_IP.
 EOF
 }
 
 show_server_install_guide() {
   cat <<'EOF'
-============================================================
-KHAREJ / خارج — EASY DIRECT ENDPOINT
-============================================================
-این مرحله فقط روی سرور خارج اجرا می‌شود.
+STEP 1 - FOREIGN SERVER
+Run this option on the Foreign server first.
 Enter only CDN_HOSTNAME. Example: xhttp.example.com
-UUID, secret path, internal port, XHTTP mode and certificate are automatic.
-
-Cloudflare A record: CDN_HOSTNAME -> FOREIGN_SERVER_IP (orange cloud ON)
-Cloudflare SSL mode: Full
+Private settings and the origin certificate are generated automatically.
+DNS: CDN_HOSTNAME -> FOREIGN_SERVER_IP, Cloudflare Proxy ON.
+Cloudflare: SSL/TLS = Full, Network > gRPC = ON.
+Port Foreign Tunnel: 443/TCP (Nginx). This must be free or owned by Nginx.
+Your destination application must use a different port, such as 8444.
 EOF
-  echo
 }
 
 show_advanced_server_install_guide() {
-  cat <<'EOF'
-============================================================
-ADVANCED ENDPOINT / endpoint پیشرفته (KHAREJ یا IRAN)
-============================================================
-این مرحله را روی سروری اجرا کن که می‌خواهی Endpoint باشد.
-در صفحهٔ بعد direction را انتخاب می‌کنی:
-  direct  = KHAREJ endpoint -> IRAN peer
-  reverse = IRAN endpoint -> KHAREJ peer
-پروفایل ports / socks / tun / all نیز در همین صفحه انتخاب می‌شود.
-EOF
-  echo
+  echo "FOREIGN SERVER - Advanced Direct settings"
+  echo "Use this screen for extra instances, certificates or traffic profiles."
 }
 
-show_reverse_server_install_guide() {
-  cat <<'EOF'
-============================================================
-IRAN / ایران — EASY REVERSE ENDPOINT
-============================================================
-این مرحله فقط روی سرور ایران اجرا می‌شود.
-Run this option on the server that owns the private service (normally IRAN).
-Enter only CDN_HOSTNAME. The endpoint listens locally and prints one complete
-peer command for the other server (normally KHAREJ). No UUID, path, or port
-mapping is required on this screen.
-
-Cloudflare A record: CDN_HOSTNAME -> this endpoint server (orange cloud ON)
-Cloudflare SSL mode: Full
-EOF
-  echo
-}
 
 show_client_install_guide() {
   cat <<'EOF'
-============================================================
-PEER INSTALL / نصب سمت مقابل (IRAN یا KHAREJ)
-============================================================
-این مرحله را روی سروری اجرا کن که عنوان آن در منو نوشته شده است.
-
-برای حالت مستقیم، دستور را از KHAREJ بگیر و روی IRAN وارد کن.
-برای حالت ریورس، دستور را از IRAN بگیر و روی KHAREJ وارد کن.
-صفحهٔ ساده فقط CLEAN_CLOUDFLARE_IP و در صورت نیاز mapping را می‌پرسد.
-
-This manual screen needs:
-  1. XHC2_PAIRING_CODE (or older XHC1_SETUP_CODE) copied from the XHTTP endpoint server.
-  2. CLEAN_CLOUDFLARE_IP reachable from this PEER server (IRAN in direct, KHAREJ in reverse).
-  3. Port mapping in this exact format:
-       IRAN_PORT=FOREIGN_SERVICE_PORT
-     Example: 2444=8444
-
-Users will connect to IRAN_SERVER_IP:IRAN_PORT.
+STEP 2 - IRAN SERVER
+Copy the setup code from the Foreign server.
+Port IR      = local port users connect to, e.g. 2444.
+Port Foreign = destination application port on Foreign, e.g. 8444.
+Advanced mapping syntax: IRAN_PORT=FOREIGN_SERVICE_PORT (2444=8444).
+Users connect to IRAN_SERVER_IP:2444.
 Do not enter FOREIGN_SERVER_IP as CLEAN_CLOUDFLARE_IP.
 EOF
-  echo
-  show_ip_names
-  echo
 }
 
 show_simple_guide() {
   cat <<'EOF'
-============================================================
-XHTTP SETUP MAP / نقشهٔ خیلی سادهٔ ایران و خارج
-============================================================
-DIRECT / مستقیم (پیشنهاد معمول):
-  1) روی KHAREJ گزینهٔ 1 را بزن و CDN_HOSTNAME را وارد کن.
-  2) روی IRAN گزینهٔ 2 را بزن.
-  3) دستور کامل چاپ‌شده در KHAREJ یا فقط کد XHC2 را paste کن.
-  4) روی IRAN فقط CLEAN_CLOUDFLARE_IP را وارد کن؛ mapping در صورت نیاز.
+XHTTP DIRECT - TWO SERVER SETUP
+1. FOREIGN SERVER: choose 1. Enter your proxied CDN hostname.
+2. IRAN SERVER: choose 2. Paste the command or setup code from Foreign.
+3. On Iran, enter a reachable Cloudflare IP, Port IR and Port Foreign.
+4. Open Port IR on the Iran firewall, and 443/TCP on the Foreign firewall.
+5. Users connect to IRAN_SERVER_IP:Port IR.
 
-REVERSE / ریورس:
-  1) روی IRAN گزینهٔ 4 را بزن و CDN_HOSTNAME را وارد کن.
-  2) روی KHAREJ گزینهٔ 5 را بزن.
-  3) دستور کامل چاپ‌شده در IRAN یا فقط کد XHC2 را paste کن.
-  4) روی KHAREJ فقط CLEAN_CLOUDFLARE_IP را وارد کن؛ mapping در صورت نیاز.
+Example: Port IR = 2444, Port Foreign = 8444.
+Traffic reaches 127.0.0.1:8444 on Foreign through Cloudflare XHTTP.
+The destination service must already listen on Foreign at that address.
+Port Foreign Tunnel = 443; Port Foreign Internal = 18080 (loopback only).
+Neither is the destination application port.
 
-اگر دستور از صفحه خارج شد، روی همان ENDPOINT گزینهٔ 3 را بزن تا دوباره ساخته شود.
-در منوی اصلی Universal ابتدا گزینهٔ 8 یعنی XHTTP را انتخاب کن.
-
-Simple example / مثال ساده:
-  Normal setup    : KHAREJ option 1 -> IRAN option 2
-  Iran asks only  : CLEAN_CLOUDFLARE_IP and IRAN_PORT=FOREIGN_SERVICE_PORT
-  Cloudflare DNS : xhttp.example.com -> FOREIGN_SERVER_IP (orange cloud ON)
-  Iran mapping   : 2444=8444
-  User connects  : IRAN_SERVER_IP:2444
-  Final target   : 127.0.0.1:8444 on the FOREIGN server
-
-Connection path:
-  IRAN_SERVER_IP:2444 -> CLEAN_CLOUDFLARE_IP:EDGE_PORT
-  -> xhttp.example.com -> FOREIGN_SERVER_IP -> 127.0.0.1:8444
-EOF
-  cat <<'EOF'
-
-Role names / اسم نقش‌ها:
-  KHAREJ = endpoint مستقیم، یا peer در مدل ریورس
-  IRAN   = peer مستقیم، یا endpoint در مدل ریورس
-  CLEAN_CLOUDFLARE_IP همیشه روی PEER وارد می‌شود، نه در DNS و نه به‌جای IP سرور.
-
-Profiles: ports = TCP/UDP mappings; socks = private SOCKS; tun = full IPv4;
-all = ports + SOCKS + TUN in one XHTTP connection.
+Option 3 on Foreign shows the Iran setup code again.
+Option 5 checks services, logs, TLS/H2 and the CDN origin route.
+Direct means Iran initiates the link to Foreign through Cloudflare.
 EOF
 }
 
@@ -348,7 +294,7 @@ validate_target_host() {
 }
 
 validate_mode() {
-  [[ "$1" == "auto" || "$1" == "packet-up" ]]
+  [[ "$1" == "auto" || "$1" == "packet-up" || "$1" == "stream-up" ]]
 }
 
 validate_edge_port() {
@@ -364,7 +310,7 @@ validate_edge_port() {
 }
 
 validate_tunnel_direction() {
-  [[ "${1,,}" == direct || "${1,,}" == reverse ]]
+  [[ "${1,,}" == direct ]]
 }
 
 validate_direction() { validate_tunnel_direction "$@"; }
@@ -646,6 +592,7 @@ pair_value() {
 make_setup_code_v2() {
   local mappings payload edge scope direction
   direction="${TUNNEL_DIRECTION:-direct}"
+  validate_tunnel_direction "$direction" || die "Only Direct XHTTP is supported. Create a new setup on Foreign."
   scope="${TRAFFIC_SCOPE:-ports}"
   edge="${EDGE_PORT:-443}"
   if ((${#MAPPING_LISTEN_PORTS[@]} == 0)) && [[ -n "${MAPPINGS:-}" ]]; then
@@ -671,18 +618,11 @@ make_xhc2_setup_code() { make_setup_code_v2 "$@"; }
 make_pairing_code() { make_setup_code_v2 "$@"; }
 
 make_iran_easy_command() {
-  local setup_code="$1" url separator='?' action='easy-client'
-  if [[ "$setup_code" == XHC2_* ]]; then
-    local decoded
-    decoded="$(base64url_decode "${setup_code#XHC2_}" 2>/dev/null || true)"
-    [[ "$(cut -d'|' -f2 <<<"$decoded")" == reverse ]] && action='easy-reverse-client'
-  elif [[ "${TUNNEL_DIRECTION:-direct}" == reverse ]]; then
-    action='easy-reverse-client'
-  fi
+  local setup_code="$1" url separator='?'
   [[ "$SELF_URL" == *\?* ]] && separator='&'
   url="${SELF_URL}${separator}cb=$(date +%s)"
-  printf 'XHTTP_CDN_SETUP_CODE=%q XHTTP_CDN_REPO=%q XHTTP_CDN_REF=%q bash <(curl -fsSL --ipv4 %q) %s' \
-    "$setup_code" "$REPO" "$REF" "$url" "$action"
+  printf 'XHTTP_CDN_SETUP_CODE=%q XHTTP_CDN_REPO=%q XHTTP_CDN_REF=%q bash <(curl -fsSL --ipv4 %q) easy-client' \
+    "$setup_code" "$REPO" "$REF" "$url"
 }
 
 iran_command_file() {
@@ -869,12 +809,6 @@ save_iran_easy_command() {
   make_iran_easy_command "$setup_code" >"$command_file"
   printf '\n' >>"$command_file"
   chmod 600 "$command_file"
-  if [[ "${TUNNEL_DIRECTION:-direct}" == reverse ]]; then
-    local peer_file
-    peer_file="$(peer_command_file "$INSTANCE")"
-    cp -f -- "$command_file" "$peer_file"
-    chmod 600 "$peer_file"
-  fi
 }
 
 load_server_pairing_values() {
@@ -937,28 +871,20 @@ load_server_pairing_values() {
 }
 
 print_iran_easy_command() {
-  local name="$1" command_file destination input_text next_step
+  local name="$1" command_file
   load_server_pairing_values "$name"
+  validate_tunnel_direction "$TUNNEL_DIRECTION" || die "Legacy Reverse instance: remove it explicitly, then set up Direct on Foreign."
   save_iran_easy_command
   command_file="$(iran_command_file "$INSTANCE")"
-  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    destination='KHAREJ / سرور خارج'
-    next_step='روی KHAREJ گزینهٔ 5 را بزن و همین دستور/کد را وارد کن.'
-  else
-    destination='IRAN / سرور ایران'
-    next_step='روی IRAN گزینهٔ 2 را بزن و همین دستور/کد را وارد کن.'
-  fi
-  input_text='CLEAN_CLOUDFLARE_IP'
-  if [[ ("$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all) && ${#MAPPING_ITEMS[@]} -eq 0 ]]; then
-    input_text+=' and PORT_MAPPING'
-  fi
   echo
-  printf '%sCOPY THIS ONE COMPLETE COMMAND TO THE %s:%s\n' "$C_BOLD" "$destination" "$C_RESET"
+  echo "IRAN SERVER - choose menu option 2 and paste this setup code:"
+  make_setup_code_v2
+  echo
+  echo
+  echo "Or run this complete command on IRAN SERVER:"
   cat "$command_file"
-  echo
-  echo "NEXT STEP / مرحلهٔ بعد: ${next_step}"
-  echo "On the peer it asks only: ${input_text}."
-  echo "If this screen is lost, run the manager on the ENDPOINT and choose menu option 3."
+  echo "Keep the code private. It contains your tunnel credentials."
+  echo "To show it again on FOREIGN SERVER, choose menu option 3."
 }
 
 parse_setup_code() {
@@ -983,6 +909,10 @@ parse_setup_code() {
   fi
   [[ "$code" == XHC2_* ]] || return 1
   payload="$(base64url_decode "${code#XHC2_}")" || return 1
+  if [[ "$payload" == "2|reverse|"* ]]; then
+    warn "Legacy Reverse setup is unsupported. Generate a Direct code on Foreign."
+    return 1
+  fi
   IFS='|' read -r -a fields <<<"$payload"
   ((${#fields[@]} >= 8)) || return 1
   version="${fields[0]}"
@@ -1001,7 +931,7 @@ parse_setup_code() {
   # emitted by early branch builds; accepting them makes copied commands
   # upgrade-safe instead of forcing an endpoint recreation.
   local offset=0
-  if [[ "${fields[1]:-}" == direct || "${fields[1]:-}" == reverse ]]; then
+  if [[ "${fields[1]:-}" == direct ]]; then
     offset=0
   else
     # Transitional layout omitted direction and started at instance.
@@ -1220,7 +1150,7 @@ ensure_xray_runtime_access() {
 }
 
 download_xray() {
-  local asset release_base archive digest expected actual extracted
+  local asset release_base archive digest expected actual extracted config_file
   asset="$(architecture_asset)"
   release_base="https://github.com/${XRAY_REPO}/releases/download/${XRAY_VERSION}"
   ensure_tmp_dir
@@ -1240,6 +1170,11 @@ download_xray() {
   unzip -p "$archive" xray >"$extracted"
   chmod 755 "$extracted"
   "$extracted" version >/dev/null 2>&1 || die "The downloaded Xray binary cannot run."
+  for config_file in "$CONFIG_DIR"/server-*.json "$CONFIG_DIR"/client-*.json; do
+    [[ -f "$config_file" ]] || continue
+    "$extracted" run -test -config "$config_file" >/dev/null 2>&1 \
+      || die "New Xray rejected ${config_file}; the installed binary was preserved."
+  done
   mkdir -p "$BIN_DIR"
   ensure_xray_runtime_access
   install -o root -g root -m 755 "$extracted" "${BIN}.new"
@@ -1259,13 +1194,15 @@ ensure_xray() {
 
 install_self() {
   local state_tmp
-  [[ "$0" == "$SELF_PATH" ]] && return 0
-  if [[ -r "$0" && -f "$0" ]]; then
-    install -o root -g root -m 755 "$0" "$SELF_PATH" 2>/dev/null || true
-  fi
   ensure_tmp_dir
+  if [[ "$0" != "$SELF_PATH" ]]; then
+    [[ -f "$0" && -r "$0" ]] || die "Run this manager from a downloaded script file."
+    bash -n "$0" || die "Manager syntax check failed."
+    install -o root -g root -m 755 "$0" "$SELF_PATH"
+  fi
   state_tmp="${TMP_DIR}/source.env"
   printf 'REPO=%s\nREF=%s\nSELF_URL=%s\n' "$REPO" "$REF" "$SELF_URL" >"$state_tmp"
+  mkdir -p "$(dirname "$SOURCE_STATE")"
   install -o root -g root -m 640 "$state_tmp" "$SOURCE_STATE"
 }
 
@@ -1318,6 +1255,9 @@ native_xhttp_extra_json() {
 }
 
 write_server_config() {
+  # Iran chooses the application ports. Permit authenticated loopback forwarding
+  # explicitly; recent Xray otherwise blackholes all VLESS private targets.
+  # Keep the two tunnel listeners blocked to prevent forwarding loops.
   local destination="$1" extra origin_port_json
   origin_port_json=$((10#${ORIGIN_PORT:-18080}))
   extra="$(native_xhttp_extra_json)"
@@ -1328,6 +1268,7 @@ write_server_config() {
     --arg mode "${XHTTP_MODE:-auto}" \
     --argjson port "$origin_port_json" \
     --argjson extra "$extra" \
+    --arg blocked_ports "$((10#$ORIGIN_PORT)),$((10#$EDGE_PORT))" \
     '{
       log: {loglevel: "warning"},
       inbounds: [{
@@ -1346,7 +1287,12 @@ write_server_config() {
           xhttpSettings: {path: $path, mode: $mode, extra: $extra}
         }
       }],
-      outbounds: [{tag: "direct", protocol: "freedom"}]
+      outbounds: [{tag: "direct", protocol: "freedom", settings: {
+        finalRules: [
+          {action: "block", ip: ["127.0.0.1/32"], port: $blocked_ports},
+          {action: "allow", ip: ["127.0.0.1/32"], network: "tcp,udp"}
+        ]
+      }}]
     }' >"$destination"
 }
 
@@ -1522,18 +1468,31 @@ EOF
 }
 
 write_nginx_config() {
-  local destination="$1" edge_port_json
+  local destination="$1" edge_port_json upstream
   edge_port_json=$((10#${EDGE_PORT:-443}))
+  if [[ "$XHTTP_MODE" == packet-up ]]; then
+    upstream="        proxy_http_version 1.1;
+        proxy_set_header Connection \"\";
+        proxy_set_header Host \$host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_pass http://127.0.0.1:${ORIGIN_PORT};"
+  else
+    upstream="        grpc_buffer_size 16k;
+        grpc_read_timeout 3600s;
+        grpc_send_timeout 3600s;
+        grpc_set_header Host \$host;
+        grpc_set_header X-Real-IP \$remote_addr;
+        grpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        grpc_set_header CF-Connecting-IP \$http_cf_connecting_ip;
+        grpc_pass grpc://127.0.0.1:${ORIGIN_PORT};"
+  fi
   cat >"$destination" <<EOF
-# Managed only by xhttp-cdn-manager for instance: ${INSTANCE}
-# A dedicated, previously unused hostname is required. Existing server blocks
-# are never edited by this manager.
+# Managed by xhttp-cdn-manager: ${INSTANCE} (Foreign server)
 server {
-    # Ubuntu 22.04/24.04 package compatibility (Nginx 1.18/1.24).
     listen ${edge_port_json} ssl http2;
     listen [::]:${edge_port_json} ssl http2;
     server_name ${DOMAIN};
-
     ssl_certificate ${TLS_CERT};
     ssl_certificate_key ${TLS_KEY};
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -1543,16 +1502,16 @@ server {
 
     location ^~ ${XHTTP_PATH} {
         client_max_body_size 0;
+        client_body_timeout 3600s;
         proxy_buffering off;
         proxy_request_buffering off;
-        grpc_buffer_size 16k;
-        grpc_read_timeout 3600s;
-        grpc_send_timeout 3600s;
-        grpc_set_header Host \$host;
-        grpc_set_header X-Real-IP \$remote_addr;
-        grpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        grpc_set_header CF-Connecting-IP \$http_cf_connecting_ip;
-        grpc_pass grpc://127.0.0.1:${ORIGIN_PORT};
+${upstream}
+    }
+
+    location = ${XHTTP_PATH}/health {
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        return 200 "xhttp-direct-origin-ok";
     }
 
     location / {
@@ -1600,24 +1559,47 @@ check_port_available() {
 }
 
 test_clean_ip() {
-  local domain="$1" ip="$2" port="${3:-${EDGE_PORT:-443}}" status remote
-  validate_domain "$domain" || die "Invalid domain: $domain"
-  validate_ipv4 "$ip" || die "Invalid Cloudflare IPv4 address: $ip"
-  validate_edge_port "$port" || die "Invalid Cloudflare edge port: $port"
-  info "Testing TLS/H2 route ${ip}:${port} with SNI/Host ${domain}..."
-  local result
-  if ! result="$(curl -sS --ipv4 --http2 --connect-timeout 10 --max-time 20 \
-      --resolve "${domain}:${port}:${ip}" -o /dev/null \
-      -w '%{http_code}|%{remote_ip}' "https://${domain}:${port}/" 2>&1)"; then
-    warn "The edge test failed: $result"
+  local domain="$1" ip="$2" port="${3:-${EDGE_PORT:-443}}"
+  local path="${4:-}" result status remote http_version body_file
+  validate_domain "$domain" || die "Invalid CDN hostname."
+  validate_ipv4 "$ip" || die "Invalid Cloudflare IPv4 address."
+  validate_edge_port "$port" || die "Invalid Cloudflare edge port."
+  [[ -z "$path" ]] || validate_xhttp_path "$path" || die "Invalid XHTTP path."
+  ensure_tmp_dir
+  body_file="${TMP_DIR}/edge-response"
+  local url="https://${domain}:${port}/" args=()
+  if [[ -n "$path" ]]; then
+    url="https://${domain}:${port}${path}/health"
+    [[ "${XHTTP_MODE:-auto}" == packet-up ]] || args=(-H 'Content-Type: application/grpc')
+  fi
+  info "Checking Iran -> Cloudflare -> Foreign (TLS/H2)..."
+  if ! result="$(curl -sS --noproxy '*' --ipv4 --http2 --connect-timeout 10 --max-time 20 \
+      --resolve "${domain}:${port}:${ip}" "${args[@]}" -o "$body_file" \
+      -w '%{http_code}|%{remote_ip}|%{http_version}' "$url" 2>&1)"; then
+    warn "TLS/network check failed: $result"
     return 1
   fi
-  IFS='|' read -r status remote <<<"$result"
-  [[ "$status" =~ ^[1-5][0-9][0-9]$ ]] || {
-    warn "No valid HTTP response was received from the selected edge."
-    return 1
-  }
-  ok "Cloudflare edge responded with HTTP ${status}; remote IP: ${remote}."
+  IFS='|' read -r status remote http_version <<<"$result"
+  case "$status" in
+    403) warn "HTTP 403: check Cloudflare gRPC, WAF and challenge settings."; return 1 ;;
+    502|504) warn "HTTP ${status}: check Foreign Xray, Nginx upstream and internal port."; return 1 ;;
+    521|522|523) warn "HTTP ${status}: check DNS -> Foreign IP, Nginx and Foreign firewall."; return 1 ;;
+    525|526) warn "HTTP ${status}: check the origin certificate and Cloudflare SSL mode (Full for self-signed)."; return 1 ;;
+    200|404) ;;
+    *) warn "Unexpected HTTP ${status:-none}; connection check did not pass."; return 1 ;;
+  esac
+  [[ "$http_version" == 2 ]] || { warn "HTTP/2 was not negotiated. Check CDN HTTP/2 settings."; return 1; }
+  if [[ -n "$path" ]]; then
+    [[ "$status" == 200 && "$(cat "$body_file")" == xhttp-direct-origin-ok ]] || {
+      warn "Foreign origin marker missing. Check hostname/path or update the Foreign installation."
+      return 1
+    }
+    ok "TLS/H2 and Foreign origin route verified via ${remote}:${port}."
+  else
+    ok "TLS/H2 reached ${remote}:${port} (HTTP ${status})."
+    warn "This checks the web route only. Use Diagnose for the installed origin check."
+  fi
+  echo "This does not prove the final application accepts connections."
 }
 
 validate_server_request() {
@@ -1625,9 +1607,12 @@ validate_server_request() {
   validate_domain "$DOMAIN" || die "Invalid dedicated Cloudflare hostname."
   validate_uuid "$UUID" || die "Invalid UUID."
   validate_xhttp_path "$XHTTP_PATH" || die "Path must be a secret /path using letters, numbers, slash, underscore or dash."
-  validate_mode "$XHTTP_MODE" || die "XHTTP mode must be auto or packet-up."
+  validate_mode "$XHTTP_MODE" || die "XHTTP mode must be auto, stream-up or packet-up."
+  if [[ "$XHTTP_MODE" != packet-up && "${ALLOW_CUSTOM_EDGE_PORT:-0}" != 1 && "${XHTTP_CDN_ALLOW_CUSTOM_EDGE_PORT:-0}" != 1 && "$EDGE_PORT" != 443 ]]; then
+    die "Cloudflare stream-up/auto requires Port Foreign Tunnel 443. Use packet-up for other supported TLS ports."
+  fi
   validate_port "$ORIGIN_PORT" || die "Invalid loopback origin port."
-  validate_tunnel_direction "$TUNNEL_DIRECTION" || die "TUNNEL_DIRECTION must be direct or reverse."
+  validate_tunnel_direction "$TUNNEL_DIRECTION" || die "Only Direct XHTTP is supported. Set up Foreign first, then Iran."
   validate_traffic_scope "$TRAFFIC_SCOPE" || die "TRAFFIC_SCOPE must be ports, socks, tun or all."
   validate_edge_port "$EDGE_PORT" || die "EDGE_PORT is not a Cloudflare proxied port (443, 2053, 2083, 2087, 2096 or 8443). Set XHTTP_CDN_ALLOW_CUSTOM_EDGE_PORT=1 only when your edge supports another port."
   validate_xmux_settings || die "Invalid native XHTTP XMUX range."
@@ -1660,8 +1645,11 @@ validate_client_values() {
   validate_domain "$DOMAIN" || die "Invalid Cloudflare hostname."
   validate_uuid "$UUID" || die "Invalid UUID."
   validate_xhttp_path "$XHTTP_PATH" || die "Invalid XHTTP path."
-  validate_mode "$XHTTP_MODE" || die "XHTTP mode must be auto or packet-up."
-  validate_tunnel_direction "$TUNNEL_DIRECTION" || die "TUNNEL_DIRECTION must be direct or reverse."
+  validate_mode "$XHTTP_MODE" || die "XHTTP mode must be auto, stream-up or packet-up."
+  if [[ "$XHTTP_MODE" != packet-up && "${ALLOW_CUSTOM_EDGE_PORT:-0}" != 1 && "${XHTTP_CDN_ALLOW_CUSTOM_EDGE_PORT:-0}" != 1 && "$EDGE_PORT" != 443 ]]; then
+    die "Cloudflare stream-up/auto requires Port Foreign Tunnel 443. Use packet-up for other supported TLS ports."
+  fi
+  validate_tunnel_direction "$TUNNEL_DIRECTION" || die "Only Direct XHTTP is supported. Set up Foreign first, then Iran."
   validate_traffic_scope "$TRAFFIC_SCOPE" || die "TRAFFIC_SCOPE must be ports, socks, tun or all."
   if ! validate_edge_port "$EDGE_PORT"; then
     # A pairing code may intentionally carry a provider-specific proxied port
@@ -1672,6 +1660,14 @@ validate_client_values() {
   validate_xmux_settings || die "Invalid native XHTTP XMUX range."
   validate_watchdog_settings || die "Invalid watchdog settings."
   validate_ipv4 "$CLEAN_IP" || die "Clean IP must be a valid Cloudflare IPv4 address."
+  if [[ "$TARGET_HOST" == 127.0.0.1 || "$TARGET_HOST" == localhost ]]; then
+    local target_port
+    for target_port in "${MAPPING_TARGET_PORTS[@]}"; do
+      if ((10#$target_port == 10#$EDGE_PORT || 10#$target_port == 10#$ORIGIN_PORT)); then
+        die "Port Foreign ${target_port} is a tunnel listener. Choose the Foreign application's port."
+      fi
+    done
+  fi
   validate_bind_address "$BIND_ADDRESS" || die "Invalid local bind IPv4 address."
   validate_target_host "$TARGET_HOST" || die "Invalid foreign target host."
   if [[ "$TRAFFIC_SCOPE" == socks || "$TRAFFIC_SCOPE" == all ]]; then
@@ -1834,19 +1830,15 @@ install_server_values() {
 
   ok "Independent XHTTP CDN endpoint is active."
   echo "Service      : $SERVICE"
-  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    echo "Server role  : IRAN / ایران (REVERSE endpoint)"
-  else
-    echo "Server role  : KHAREJ / خارج (DIRECT endpoint)"
-  fi
-  echo "Xray origin  : 127.0.0.1:${ORIGIN_PORT}"
+  echo "Server role  : FOREIGN SERVER (Direct endpoint)"
+  echo "Port Foreign Internal: 127.0.0.1:${ORIGIN_PORT} (private)"
   echo "CDN hostname : $DOMAIN"
   echo "XHTTP path   : $XHTTP_PATH"
   echo "Direction    : ${TUNNEL_DIRECTION^^} endpoint"
   echo "Profile      : $TRAFFIC_SCOPE"
-  echo "Edge port    : $EDGE_PORT"
+  echo "Port Foreign Tunnel  : $EDGE_PORT (Nginx)"
   echo "Certificate  : $CERT_MODE"
-  echo "Cloudflare DNS: ${DOMAIN} -> XHTTP_ENDPOINT_SERVER (this server, Proxied ON)"
+  echo "Cloudflare DNS: ${DOMAIN} -> FOREIGN_SERVER_IP (this server, Proxy ON)"
   echo
   cloudflare_checklist
   print_iran_easy_command "$INSTANCE"
@@ -1854,13 +1846,8 @@ install_server_values() {
 
 print_client_route_summary() {
   local i listen_port target_port listener_label target_label protocol
-  if [[ "${TUNNEL_DIRECTION:-direct}" == reverse ]]; then
-    listener_label='FOREIGN_SERVER_IP'
-    target_label='IRAN_SERVER_IP'
-  else
-    listener_label='IRAN_SERVER_IP'
-    target_label='FOREIGN_SERVER_IP'
-  fi
+  listener_label='IRAN_SERVER_IP'
+  target_label='FOREIGN_SERVER_IP'
   echo "Users connect : ${listener_label} (public IP of this peer)"
   echo "Clean edge   : CLEAN_CLOUDFLARE_IP=${CLEAN_IP}:${EDGE_PORT:-443}"
   echo "CDN hostname : $DOMAIN"
@@ -1871,7 +1858,7 @@ print_client_route_summary() {
     echo "Route         : ${listener_label}:${listen_port} -> ${CLEAN_IP}:${EDGE_PORT:-443} -> ${DOMAIN} -> ${TARGET_HOST}:${target_port} (${protocol^^}; ${target_label} side)"
   done
   if [[ "${TRAFFIC_SCOPE:-ports}" == socks || "${TRAFFIC_SCOPE:-ports}" == all ]]; then
-    echo "SOCKS         : ${SOCKS_BIND}:${SOCKS_PORT} (private by default)"
+    echo "Port IR SOCKS : ${SOCKS_BIND}:${SOCKS_PORT} (private by default)"
   fi
   if [[ "${TRAFFIC_SCOPE:-ports}" == tun || "${TRAFFIC_SCOPE:-ports}" == all ]]; then
     echo "TUN           : ${TUN_NAME} / gateway ${TUN_GATEWAY} / MTU ${TUN_MTU}"
@@ -1939,21 +1926,17 @@ install_client_values() {
   fi
   enable_instance_watchdog "$SERVICE"
 
-  ok "Independent XHTTP CDN peer tunnel is active."
+  ok "Independent XHTTP service is running. Connection checks follow."
   echo "Service     : $SERVICE"
-  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    echo "Server role : KHAREJ / خارج (REVERSE peer)"
-  else
-    echo "Server role : IRAN / ایران (DIRECT peer)"
-  fi
+  echo "Server role : IRAN SERVER (Direct client)"
   echo "Direction   : ${TUNNEL_DIRECTION^^} peer"
   echo "Profile     : $TRAFFIC_SCOPE"
   print_client_route_summary
   echo
   if validate_edge_port "$EDGE_PORT"; then
-    test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this clean IP is not currently reachable from this server."
+    test_clean_ip "$DOMAIN" "$CLEAN_IP" "$EDGE_PORT" "$XHTTP_PATH" || warn "The service is installed, but this clean IP is not currently reachable from this server."
   else
-    ALLOW_CUSTOM_EDGE_PORT=1 test_clean_ip "$DOMAIN" "$CLEAN_IP" || warn "The service is installed, but this custom edge port is not currently reachable from this server."
+    ALLOW_CUSTOM_EDGE_PORT=1 test_clean_ip "$DOMAIN" "$CLEAN_IP" "$EDGE_PORT" "$XHTTP_PATH" || warn "The service is installed, but this custom edge port is not currently reachable from this server."
   fi
 }
 
@@ -1973,28 +1956,27 @@ reset_profile_defaults() {
 
 show_scope_choices() {
   cat <<'EOF'
-Traffic scope / نوع تونل:
-  ports = نگاشت TCP/UDP پورت‌ها (ساده و پیش‌فرض)
-  socks = پراکسی SOCKS خصوصی روی همین سرور
-  tun   = تونل کامل IPv4 از طریق رابط TUN
-  all   = ports + SOCKS + TUN در یک اتصال XHTTP
+Advanced traffic profile (all use Direct XHTTP):
+  ports = TCP/UDP forwarding (default)
+  socks = private SOCKS proxy on Iran
+  tun   = route Iran IPv4 traffic through a TUN interface
+  all   = ports + SOCKS + TUN
 EOF
 }
 
 collect_profile_options() {
-  local direction_choice scope_choice mappings
-  prompt_default "[profile] TUNNEL_DIRECTION (direct or reverse)" "${TUNNEL_DIRECTION:-direct}" direction_choice
-  TUNNEL_DIRECTION="${direction_choice,,}"
+  local mappings
+  TUNNEL_DIRECTION=direct
   show_scope_choices
   prompt_default "TRAFFIC_SCOPE (ports/socks/tun/all)" "${TRAFFIC_SCOPE:-ports}" TRAFFIC_SCOPE
   TRAFFIC_SCOPE="${TRAFFIC_SCOPE,,}"
-  prompt_default "EDGE_PORT (Cloudflare: 443, 2053, 2083, 2087, 2096, 8443)" "${EDGE_PORT:-443}" EDGE_PORT
+  prompt_default "Port Foreign Tunnel (443 for auto/gRPC; other TLS ports for packet-up)" "${EDGE_PORT:-443}" EDGE_PORT
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
-    prompt_default "PORT_MAPPINGS (tcp:2444=8444,udp:5353=53,both:8443=8443; Enter keeps peer prompt)" "" mappings
+    prompt_default "Port IR=Port Foreign (e.g. tcp:2444=8444; Enter asks later on Iran)" "" mappings
     [[ -z "$mappings" ]] || parse_mappings "$mappings" || die "Invalid PORT_MAPPINGS."
   fi
   if [[ "$TRAFFIC_SCOPE" == socks || "$TRAFFIC_SCOPE" == all ]]; then
-    prompt_default "SOCKS_PORT" "${SOCKS_PORT:-10808}" SOCKS_PORT
+    prompt_default "Port IR SOCKS" "${SOCKS_PORT:-10808}" SOCKS_PORT
     prompt_default "SOCKS_BIND (127.0.0.1 is recommended)" "${SOCKS_BIND:-127.0.0.1}" SOCKS_BIND
   fi
   if [[ "$TRAFFIC_SCOPE" == tun || "$TRAFFIC_SCOPE" == all ]]; then
@@ -2020,7 +2002,7 @@ collect_server_easy_values() {
   TLS_CERT=""
   TLS_KEY=""
 
-  prompt_required "[1/1] CDN_HOSTNAME / دامنه کلودفلر (example: xhttp.example.com)" DOMAIN
+  prompt_required "CDN hostname (example: xhttp.example.com)" DOMAIN
   DOMAIN="${DOMAIN,,}"
   ok "All private XHTTP settings were generated automatically."
 }
@@ -2031,18 +2013,18 @@ collect_server_advanced_values() {
   prompt_default "[1/6] INSTANCE_NAME (Enter is recommended)" "cf1" INSTANCE
   prompt_required "[2/6] CDN_HOSTNAME (orange-cloud domain, example: xhttp.example.com)" DOMAIN
   DOMAIN="${DOMAIN,,}"
-  prompt_default "[3/6] INTERNAL_XRAY_PORT (private; do not open in firewall)" "18080" ORIGIN_PORT
+  prompt_default "[3/6] Port Foreign Internal (loopback only; not the application port)" "18080" ORIGIN_PORT
   suggested_uuid="$(generate_uuid)"
   prompt_default "[4/6] VLESS_UUID (press Enter to generate)" "$suggested_uuid" UUID
   suggested_path="$(generate_path)"
   prompt_default "[5/6] SECRET_XHTTP_PATH (press Enter to generate)" "$suggested_path" XHTTP_PATH
-  prompt_default "[6/6] XHTTP_MODE (press Enter for auto; alternative: packet-up)" "auto" XHTTP_MODE
+  prompt_default "[6/6] XHTTP_MODE (auto/stream-up/packet-up)" "auto" XHTTP_MODE
 
   echo
   collect_profile_options
 
   echo
-  echo "Origin certificate / گواهی سرور خارج:"
+  echo "Foreign origin certificate:"
   echo "1) Automatic Let's Encrypt via Cloudflare DNS API (recommended / Full strict)"
   echo "2) Automatic self-signed certificate (easiest, no token / Cloudflare Full)"
   echo "3) Use an existing certificate"
@@ -2083,23 +2065,19 @@ collect_server_advanced_values() {
 collect_client_values() {
   local setup_code mappings
   prompt_default "[1] INSTANCE_NAME (Enter is recommended)" "cf1" INSTANCE
-  prompt_required "[2] XHC2/XHC1_PAIRING_CODE copied from the endpoint (KHAREJ or IRAN)" setup_code
+  prompt_required "[2] XHC2/XHC1_PAIRING_CODE copied from FOREIGN SERVER" setup_code
   parse_setup_code "$setup_code" || die "Invalid or damaged XHC pairing code."
   # XHC2 carries the instance/profile itself. XHC1 keeps the operator's
   # explicitly selected name for backward compatibility.
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="${INSTANCE:-cf1}"
-  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    prompt_required "[3] CLEAN_CLOUDFLARE_IP (روی KHAREJ؛ edge IPv4, not server IP)" CLEAN_IP
-  else
-    prompt_required "[3] CLEAN_CLOUDFLARE_IP (روی IRAN؛ edge IPv4, not server IP)" CLEAN_IP
-  fi
-  prompt_default "[4] PEER_BIND_ADDRESS (0.0.0.0 lets users reach this peer)" "0.0.0.0" BIND_ADDRESS
-  prompt_default "[5] ENDPOINT_TARGET_HOST (usually 127.0.0.1)" "127.0.0.1" TARGET_HOST
+    prompt_required "[3] Cloudflare IP reachable from Iran (not a server IP)" CLEAN_IP
+  prompt_default "[4] Iran listen address (0.0.0.0 accepts user connections)" "0.0.0.0" BIND_ADDRESS
+  prompt_default "[5] Foreign application address (usually 127.0.0.1)" "127.0.0.1" TARGET_HOST
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
     echo
-    echo "Port mapping / نگاشت پورت: LOCAL_PORT=REMOTE_TARGET_PORT"
-    echo "Example: 2444=8444 means users connect to PEER_SERVER_IP:2444"
-    echo "         and traffic reaches 127.0.0.1:8444 on the endpoint server."
+    echo "Port mapping: Port IR=Port Foreign"
+    echo "Example: 2444=8444 means users connect to IRAN_SERVER_IP:2444"
+    echo "         and traffic reaches 127.0.0.1:8444 on the Foreign server."
     if ((${#MAPPING_ITEMS[@]} == 0)); then
       prompt_required "PORT_MAPPINGS (tcp:2444=8444, udp:5353=53, both:8443=8443)" mappings
       parse_mappings "$mappings" || die "Invalid mappings. Use LOCAL_PORT=REMOTE_TARGET_PORT."
@@ -2109,29 +2087,41 @@ collect_client_values() {
   fi
 }
 
+collect_simple_mappings() {
+  local port_ir port_foreign protocol more raw=''
+  while true; do
+    prompt_required "Port IR (users connect to this port on Iran, e.g. 2444)" port_ir
+    validate_port "$port_ir" || { warn "Port IR must be 1-65535."; continue; }
+    prompt_required "Port Foreign (application port on Foreign, e.g. 8444)" port_foreign
+    validate_port "$port_foreign" || { warn "Port Foreign must be 1-65535."; continue; }
+    if ((10#$port_foreign == 10#$EDGE_PORT || 10#$port_foreign == 10#$ORIGIN_PORT)); then
+      warn "Port Foreign is a tunnel listener. Use your application port instead."
+      continue
+    fi
+    prompt_default "Protocol (tcp/udp/both)" "tcp" protocol
+    validate_mapping_protocol "$protocol" || { warn "Choose tcp, udp or both."; continue; }
+    parse_mappings "${raw}${protocol}:${port_ir}=${port_foreign}" || { warn "Duplicate or invalid mapping."; continue; }
+    raw="$(serialize_mappings),"
+    echo "Port IR ${port_ir} -> Port Foreign ${port_foreign} (${protocol})"
+    prompt_default "Add another port? (y/n)" "n" more
+    [[ "${more,,}" == y || "${more,,}" == yes ]] || break
+  done
+}
+
 collect_client_easy_values() {
-  local setup_code="$1" mappings
-  [[ -n "$setup_code" ]] || die "The automatic peer command is missing its private pairing data."
-  parse_setup_code "$setup_code" || die "The automatic peer command is invalid or damaged. Copy the whole command again."
+  local setup_code="$1"
+  [[ -n "$setup_code" ]] || die "Copy the setup code from FOREIGN SERVER first."
+  parse_setup_code "$setup_code" || die "Invalid setup code. Copy a Direct code from Foreign."
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="cf1"
   BIND_ADDRESS="0.0.0.0"
   TARGET_HOST="127.0.0.1"
-
-  ok "Endpoint settings received automatically; no setup code entry is needed."
-  if [[ "$TUNNEL_DIRECTION" == reverse ]]; then
-    prompt_required "[1] CLEAN_CLOUDFLARE_IP (روی KHAREJ؛ not Iran IP, not endpoint IP)" CLEAN_IP
-  else
-    prompt_required "[1] CLEAN_CLOUDFLARE_IP (روی IRAN؛ not Iran IP, not endpoint IP)" CLEAN_IP
-  fi
+  echo "IRAN SERVER - Direct XHTTP"
+  prompt_required "Cloudflare IP reachable from Iran (not a server IP)" CLEAN_IP
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
     if ((${#MAPPING_ITEMS[@]} == 0)); then
-      echo
-      echo "Port mapping: LOCAL_PORT=REMOTE_TARGET_PORT"
-      echo "Example: 2444=8444"
-      prompt_required "[2] PORT_MAPPING" mappings
-      parse_mappings "$mappings" || die "Invalid mapping. Example: 2444=8444 or 2444=8444,2083=2083."
+      collect_simple_mappings
     else
-      echo "Embedded PORT_MAPPING: $(serialize_mappings)"
+      echo "Saved mappings (Port IR=Port Foreign): $(serialize_mappings)"
     fi
   fi
 }
@@ -2139,29 +2129,25 @@ collect_client_easy_values() {
 install_server_interactive() {
   show_server_install_guide
   collect_server_easy_values
+  validate_server_request
   prepare_install server
   install_server_values
 }
 
-install_reverse_server_interactive() {
-  show_reverse_server_install_guide
-  collect_server_easy_values
-  TUNNEL_DIRECTION="reverse"
-  prepare_install server
-  install_server_values
-}
 
 install_server_advanced_interactive() {
   show_advanced_server_install_guide
   collect_server_advanced_values
+  validate_server_request
   prepare_install server
   install_server_values
 }
 
 install_client_interactive() {
   show_client_install_guide
-  prepare_install client
   collect_client_values
+  validate_client_values
+  prepare_install client
   install_client_values
 }
 
@@ -2172,23 +2158,15 @@ install_client_easy_interactive() {
     parse_setup_code "$setup_code" || die "The automatic peer command is invalid or damaged."
   fi
   logo
-  if [[ "${TUNNEL_DIRECTION:-direct}" == reverse ]]; then
-    echo "KHAREJ / خارج — EASY REVERSE PEER"
-  else
-    echo "IRAN / ایران — EASY DIRECT PEER"
-  fi
+  echo "IRAN SERVER - Direct setup"
   echo "Private endpoint settings are already inside the copied command."
   echo
   collect_client_easy_values "$setup_code"
+  validate_client_values
   prepare_install client
   install_client_values
 }
 
-install_reverse_client_interactive() {
-  local setup_code="${1:-${XHTTP_CDN_SETUP_CODE:-}}"
-  [[ -n "$setup_code" ]] || die "Paste the complete reverse peer command or set XHTTP_CDN_SETUP_CODE."
-  install_client_easy_interactive "$setup_code"
-}
 
 # Extract only the opaque pairing token from either a bare XHC code or the
 # complete one-line command printed by an endpoint.  The command is never
@@ -2203,47 +2181,30 @@ extract_setup_code() {
 }
 
 install_peer_menu_interactive() {
-  local expected_direction="${1:-direct}" raw setup_code actual_direction actual_role expected_role
+  local raw setup_code
   require_root
-  if [[ "$expected_direction" == reverse ]]; then
-    expected_role='KHAREJ / خارج'
-    prompt_required "KHAREJ / خارج — paste the complete command or XHC2 code from IRAN" raw
-  else
-    expected_role='IRAN / ایران'
-    prompt_required "IRAN / ایران — paste the complete command or XHC2 code from KHAREJ" raw
-  fi
-  setup_code="$(extract_setup_code "$raw")" || die "No XHC1/XHC2 pairing code was found. Paste the complete one-line command or the code only."
-  parse_setup_code "$setup_code" || die "The pasted XHTTP pairing code is invalid or damaged. Copy it again from the endpoint."
-  actual_direction="${TUNNEL_DIRECTION:-direct}"
-  if [[ "$actual_direction" != "$expected_direction" ]]; then
-    if [[ "$actual_direction" == reverse ]]; then
-      actual_role='KHAREJ / خارج'
-    else
-      actual_role='IRAN / ایران'
-    fi
-    die "This code is for ${actual_role} (direction: ${actual_direction}); use the ${expected_role} option with a ${expected_direction} endpoint code."
-  fi
+  show_client_install_guide
+  prompt_required "IRAN SERVER - paste the setup code or full command from FOREIGN SERVER" raw
+  setup_code="$(extract_setup_code "$raw")" || die "No XHC1/XHC2 setup code found."
   install_client_easy_interactive "$setup_code"
 }
 
 cloudflare_checklist() {
   local ssl_mode="Full (strict)"
-  [[ "${CERT_MODE:-letsencrypt}" == "self-signed" ]] && ssl_mode="Full"
+  [[ "${CERT_MODE:-self-signed}" == self-signed ]] && ssl_mode="Full"
   cat <<EOF
-Cloudflare requirements:
-  1. Create A for CDN_HOSTNAME -> the XHTTP endpoint server.
-  2. Enable Proxy (orange cloud).
-  3. Set SSL/TLS mode to ${ssl_mode}.
-  4. Enable Network -> gRPC.
-  5. Allow TCP/${EDGE_PORT:-443} to Nginx on the endpoint server.
-  6. On the peer, enter CLEAN_CLOUDFLARE_IP; SNI/Host stays CDN_HOSTNAME.
-  7. Users connect to the peer public IP; the endpoint stays behind Cloudflare.
+Cloudflare setup:
+  DNS: CDN_HOSTNAME -> FOREIGN_SERVER_IP, Proxy ON.
+  SSL/TLS: ${ssl_mode}. Self-signed origin certificates require Full.
+  Network > gRPC: ON when using auto or stream-up.
+  Bypass caching and interactive challenges for the XHTTP path.
+  Foreign firewall: allow Port Foreign Tunnel (${EDGE_PORT:-443}/TCP).
+  Iran firewall: allow each Port IR for its selected TCP/UDP protocol.
+  Foreign application: listen on 127.0.0.1:Port Foreign (or the configured target).
 
-This profile uses TLS/H2 + XHTTP auto (stream-up through Cloudflare). If the
-CDN path is incompatible, create the instance with packet-up mode. XHTTP uses
-its native XMUX (max concurrency ${XMUX_MAX_CONCURRENCY:-8-16}); mux.cool is
-intentionally not enabled. The ${TRAFFIC_SCOPE:-ports} profile carries the
-selected port mappings, private SOCKS listener and/or full IPv4 TUN.
+Auto uses the core-selected XHTTP mode over TLS/H2 on port 443.
+Stream-up is available explicitly; packet-up is the compatibility option.
+The service watchdog detects stopped processes, not end-to-end connectivity.
 EOF
 }
 
@@ -2366,15 +2327,23 @@ remove_instance_interactive() {
 }
 
 update_core() {
-  local service
+  local service failed=0
   require_root
   ensure_dependencies client
   download_xray
   while IFS= read -r service; do
-    [[ -n "$service" ]] && systemctl restart "$service" || true
+    [[ -n "$service" ]] || continue
+    if ! systemctl restart "$service" || ! systemctl is-active --quiet "$service"; then
+      warn "Service did not restart successfully: $service. Use Diagnose."
+      failed=1
+    fi
   done < <(systemctl list-unit-files --type=service --no-legend 'xhttp-cdn-*.service' 2>/dev/null \
     | awk '$1 !~ /-watchdog\.service$/ {sub(/\.service$/, "", $1); print $1}')
-  ok "Isolated XHTTP CDN Xray core updated; unrelated Xray and tunnel services were not restarted."
+  if ((failed)); then
+    warn "Xray was updated, but at least one service failed its check."
+    return 1
+  fi
+  ok "Xray updated; all selected XHTTP services are running."
 }
 
 update_manager() {
@@ -2390,95 +2359,111 @@ update_manager() {
   ok "Manager updated: $SELF_PATH"
 }
 
+restart_instance() {
+  require_root
+  select_instance all || return 0
+  service_paths "$SELECTED_ROLE" "$SELECTED_INSTANCE"
+  if systemctl restart "$SERVICE" && systemctl is-active --quiet "$SERVICE"; then
+    ok "Restarted $SERVICE."
+  else
+    warn "Restart failed. Choose Diagnose to view logs."
+  fi
+}
+
+diagnose_instance() {
+  require_root
+  select_instance all || return 0
+  service_paths "$SELECTED_ROLE" "$SELECTED_INSTANCE"
+  echo "Checking $SERVICE"
+  validate_xray_config "$CONFIG" || warn "Xray configuration validation failed."
+  systemctl status "$SERVICE" --no-pager -l || true
+  if [[ "$SELECTED_ROLE" == server ]]; then
+    nginx -t || true
+    echo "FOREIGN: Nginx must own Port Foreign Tunnel; the application needs its own port."
+    command -v ss >/dev/null && ss -ltnup || true
+  else
+    local domain ip port path
+    domain="$(jq -r '.outbounds[0].streamSettings.tlsSettings.serverName' "$CONFIG")"
+    ip="$(jq -r '.outbounds[0].settings.vnext[0].address' "$CONFIG")"
+    port="$(jq -r '.outbounds[0].settings.vnext[0].port' "$CONFIG")"
+    path="$(jq -r '.outbounds[0].streamSettings.xhttpSettings.path' "$CONFIG")"
+    XHTTP_MODE="$(jq -r '.outbounds[0].streamSettings.xhttpSettings.mode' "$CONFIG")"
+    test_clean_ip "$domain" "$ip" "$port" "$path" || true
+    echo "Iran port mappings (check the destination listener on Foreign):"
+    jq -r '.inbounds[] | select(.protocol == "dokodemo-door") |
+      "Port IR \(.port) -> Foreign \(.settings.address):\(.settings.port) [\(.settings.network)]"' "$CONFIG"
+  fi
+  echo "Recent Xray logs:"
+  journalctl -u "$SERVICE" -n 40 --no-pager -o cat || true
+}
+
 logo() {
-  printf '%s%sIndependent XHTTP CDN / Endpoint + Peer Manager%s\n' "$C_CYAN" "$C_BOLD" "$C_RESET"
-  printf 'Manager %s | isolated Xray %s\n\n' "$SCRIPT_VERSION" "$XRAY_VERSION"
+  printf '\nXHTTP Direct | Foreign + Iran\n'
+  printf 'Manager %s | Xray %s\n\n' "$SCRIPT_VERSION" "$XRAY_VERSION"
 }
 
 main_menu() {
-  local choice domain ip edge_port
+  local choice
   while true; do
-    clear 2>/dev/null || true
     logo
-    echo "DIRECT / مستقیم:  1) KHAREJ endpoint  ->  2) IRAN peer"
-    echo "REVERSE / ریورس:  4) IRAN endpoint   ->  5) KHAREJ peer"
+    echo "Set up Foreign first, then Iran."
     echo
-    echo "1) KHAREJ / خارج — EASY DIRECT endpoint (فقط CDN_HOSTNAME)"
-    echo "2) IRAN / ایران — EASY DIRECT peer (دستور/کد از KHAREJ)"
-    echo "3) ENDPOINT — نمایش دوباره دستور نصب PEER"
-    echo "4) IRAN / ایران — EASY REVERSE endpoint (فقط CDN_HOSTNAME)"
-    echo "5) KHAREJ / خارج — EASY REVERSE peer (دستور/کد از IRAN)"
-    echo "6) حذف نصب XHTTP"
-    echo "7) وضعیت نصب‌ها"
-    echo "8) تست CLEAN_CLOUDFLARE_IP روی PEER"
-    echo "9) بروزرسانی Xray جداگانه"
-    echo "10) بروزرسانی همین XHTTP Manager"
-    echo "11) ADVANCED direct/reverse profile (ports/SOCKS/TUN/all)"
-    echo "12) راهنمای سادهٔ IRAN / KHAREJ"
-    echo "0) Return/exit"
-    echo
-    IFS= read -r -p "Choose [0-12]: " choice
+    echo "1) FOREIGN SERVER - Set up Direct tunnel"
+    echo "2) IRAN SERVER    - Connect using Foreign setup code"
+    echo "3) FOREIGN SERVER - Show Iran setup code again"
+    echo "4) Status"
+    echo "5) Diagnose connection / show logs"
+    echo "6) Restart an XHTTP service"
+    echo "7) Remove an XHTTP installation"
+    echo "8) Advanced settings (Foreign)"
+    echo "9) Update Xray core"
+    echo "10) Update this manager"
+    echo "11) Setup guide"
+    echo "0) Exit"
+    IFS= read -r -p "Choose [0-11]: " choice || return 0
     case "$choice" in
       1) install_server_interactive; pause_menu ;;
-      2) install_peer_menu_interactive direct; pause_menu ;;
+      2) install_peer_menu_interactive; pause_menu ;;
       3) show_iran_command_interactive; pause_menu ;;
-      4) install_reverse_server_interactive; pause_menu ;;
-      5) install_peer_menu_interactive reverse; pause_menu ;;
-      6) remove_instance_interactive; pause_menu ;;
-      7) list_instances; pause_menu ;;
-      8)
-        ensure_dependencies client
-        echo "Run this test on the PEER server (IRAN for direct, KHAREJ for reverse)."
-        prompt_required "CDN_HOSTNAME (example: xhttp.example.com)" domain
-        prompt_required "CLEAN_CLOUDFLARE_IP (not Iran IP, not foreign IP)" ip
-        prompt_default "EDGE_PORT" "443" edge_port
-        test_clean_ip "${domain,,}" "$ip" "$edge_port" || true
-        pause_menu
-        ;;
+      4) list_instances; pause_menu ;;
+      5) diagnose_instance; pause_menu ;;
+      6) restart_instance; pause_menu ;;
+      7) remove_instance_interactive; pause_menu ;;
+      8) install_server_advanced_interactive; pause_menu ;;
       9) update_core; pause_menu ;;
       10) update_manager; pause_menu ;;
-      11) install_server_advanced_interactive; pause_menu ;;
-      12) show_simple_guide; echo; cloudflare_checklist; pause_menu ;;
+      11) show_simple_guide; cloudflare_checklist; pause_menu ;;
       0|q|quit|exit) return 0 ;;
-      *) warn "Invalid selection."; sleep 1 ;;
+      *) warn "Choose a number from 0 to 11." ;;
     esac
   done
 }
 
 usage() {
   cat <<EOF
-Independent XHTTP CDN Manager ${SCRIPT_VERSION}
+XHTTP Direct Manager ${SCRIPT_VERSION}
+Run Foreign setup first, then Iran setup. Direct connections use Cloudflare.
 
-Usage:
-  xhttp-cdn-manager                 Open interactive menu
-  xhttp-cdn-manager status          List only XHTTP CDN instances
-  xhttp-cdn-manager peer-command    Show the saved/rebuilt peer command
-  xhttp-cdn-manager iran-command    Compatibility alias for peer-command
-  xhttp-cdn-manager reverse-server  Easy reverse endpoint (one hostname input)
-  xhttp-cdn-manager remove          Delete one installation with a numbered choice
+  xhttp-cdn-manager                 Open menu
+  xhttp-cdn-manager foreign         Set up FOREIGN SERVER
+  xhttp-cdn-manager iran-peer       Set up IRAN SERVER with Foreign code
+  xhttp-cdn-manager iran-command    Show Iran setup code on Foreign
+  xhttp-cdn-manager easy-client     Install Iran using the copied command
+  xhttp-cdn-manager status          List XHTTP services
+  xhttp-cdn-manager diagnose        Check connection and recent logs
+  xhttp-cdn-manager restart         Restart one XHTTP service
+  xhttp-cdn-manager remove          Remove one XHTTP installation
+  xhttp-cdn-manager guide           Explain roles, ports and Cloudflare
   xhttp-cdn-manager test-edge DOMAIN CLEAN_IP [EDGE_PORT]
-  xhttp-cdn-manager update-core     Update only ${BIN}
-  xhttp-cdn-manager checklist       Show Cloudflare requirements
-  xhttp-cdn-manager guide           Show the easy two-step setup guide
-  xhttp-cdn-manager easy-client     Automatic Iran install from the foreign command
-  xhttp-cdn-manager easy-reverse-client  Automatic reverse peer install
-  xhttp-cdn-manager iran-peer       Interactive KHAREJ -> IRAN peer setup
-  xhttp-cdn-manager kharej-peer     Interactive IRAN -> KHAREJ peer setup
-  xhttp-cdn-manager advanced-server Show direct/reverse ports/SOCKS/TUN/all settings
-  xhttp-cdn-manager advanced-client Manual peer install with an XHC1/XHC2 code
-  xhttp-cdn-manager watchdog SERVICE Run one health check/restart
+  xhttp-cdn-manager advanced-server Advanced Foreign profiles/certificates
+  xhttp-cdn-manager advanced-client Advanced Iran port mappings
+  xhttp-cdn-manager update-core     Update the isolated Xray core
+  xhttp-cdn-manager update-manager  Update this manager
   xhttp-cdn-manager --version
 
-  Menu roles are explicit: direct is KHAREJ endpoint -> IRAN peer; reverse is
-  IRAN endpoint -> KHAREJ peer. Paste a complete endpoint command or only its
-  XHC1/XHC2 code into the matching peer menu item; pasted shell is never run.
-
-The interactive installer creates either a direct or reverse XHTTP endpoint.
-Its peer supports TCP/UDP/both port mappings, private SOCKS, full IPv4 TUN, or
-all profiles together. The endpoint can obtain and renew Let's Encrypt
-through a locally entered Cloudflare DNS API token, generate a self-signed
-origin certificate automatically, or reuse an existing certificate. It never
-edits existing transport configurations.
+Port IR = Iran user-facing port. Port Foreign = Foreign application port.
+Port Foreign Tunnel = Nginx port (443). Port Foreign Internal = local Xray port.
+Old Direct XHC1/XHC2 codes are accepted. Pasted shell commands are never run.
 EOF
 }
 
@@ -2487,9 +2472,11 @@ main() {
   case "$command" in
     menu) require_root; main_menu ;;
     status) require_root; list_instances ;;
+    diagnose) require_root; diagnose_instance ;;
+    restart) require_root; restart_instance ;;
+    update-manager) update_manager ;;
     iran-command|peer-command) [[ $# -le 2 ]] || { usage >&2; exit 2; }; show_iran_command_interactive "${2:-}" ;;
     iran-peer|direct-client-menu) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; install_peer_menu_interactive direct ;;
-    kharej-peer|reverse-client-menu) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; install_peer_menu_interactive reverse ;;
     remove) [[ $# -eq 1 ]] || { usage >&2; exit 2; }; remove_instance_interactive ;;
     test-edge)
       [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
@@ -2501,19 +2488,14 @@ main() {
     guide) show_simple_guide; echo; cloudflare_checklist ;;
     advanced-server) install_server_advanced_interactive ;;
     advanced-client) install_client_interactive ;;
-    reverse-server|easy-reverse-server) install_reverse_server_interactive ;;
+    foreign|server) install_server_interactive ;;
     easy-client|--easy-client)
       [[ $# -le 2 ]] || die "Use the complete automatic command printed by the foreign server."
       setup_code="${2:-${XHTTP_CDN_SETUP_CODE:-}}"
       install_client_easy_interactive "$setup_code"
       ;;
-    easy-reverse-client|reverse-client)
-      [[ $# -le 2 ]] || die "Use the complete automatic command printed by the reverse endpoint."
-      setup_code="${2:-${XHTTP_CDN_SETUP_CODE:-}}"
-      install_reverse_client_interactive "$setup_code"
-      ;;
     watchdog)
-      [[ $# -eq 2 && "$2" == xhttp-cdn-* ]] || die "Usage: xhttp-cdn-manager watchdog xhttp-cdn-ROLE-INSTANCE"
+      [[ $# -eq 2 && "$2" =~ ^xhttp-cdn-(server|client)-[a-z0-9][a-z0-9_-]{0,31}(\.service)?$ ]] || die "Usage: xhttp-cdn-manager watchdog xhttp-cdn-ROLE-INSTANCE"
       systemctl is-active --quiet "$2" || systemctl restart "$2"
       ;;
     -h|--help|help) usage ;;
