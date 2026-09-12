@@ -144,7 +144,7 @@ CURRENT_XHTTP_MANAGER="$TMP_DIR/current-xhttp-manager"
 cat >"$CURRENT_XHTTP_MANAGER" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  echo "xhttp-cdn-manager 2.1.0"
+  echo "xhttp-cdn-manager 3.1.0"
   exit 0
 fi
 echo 'current-xhttp-manager' >>"${TUNNEL_TEST_LOG:?}"
@@ -208,7 +208,7 @@ printf '0\n' | env "${COMMON_ENV[@]}" bash "$LAUNCHER" >"$TMP_DIR/menu.txt"
 grep -q '1) Backhaul family - Standard / XWSMUX Max / TUN' "$TMP_DIR/menu.txt"
 grep -q '2) V2Quantum - TCP / Quantum / Raw spoof-BIP' "$TMP_DIR/menu.txt"
 grep -q '3) Realm - TCP/UDP port forwarding' "$TMP_DIR/menu.txt"
-grep -q '8) XHTTP CDN - KHAREJ/IRAN direct + reverse (ports/SOCKS/TUN/all)' "$TMP_DIR/menu.txt"
+grep -q '8) XHTTP Tunnel Cloudflare - Direct + IP scanner' "$TMP_DIR/menu.txt"
 if grep -q '^2) XWSMUX Max' "$TMP_DIR/menu.txt"; then
   echo "XWSMUX Max is still duplicated in the top-level menu" >&2
   exit 1

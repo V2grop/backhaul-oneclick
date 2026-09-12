@@ -22,7 +22,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" && "$0" == /dev/fd/* ]]; then
   exit $?
 fi
 
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.1.0"
 REPO="${XHTTP_CDN_REPO:-V2grop/backhaul-oneclick}"
 REF="${XHTTP_CDN_REF:-${TUNNEL_MANAGER_REF:-codex/v2quantum-go-v1}}"
 RAW_BASE="${XHTTP_CDN_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -188,11 +188,12 @@ show_server_install_guide() {
   cat <<'EOF'
 STEP 1 - FOREIGN SERVER
 Run this option on the Foreign server first.
-Enter only CDN_HOSTNAME. Example: xhttp.example.com
+Enter CDN_HOSTNAME, then CLOUDFLARE_TUNNEL_PORT (default 443).
 Private settings and the origin certificate are generated automatically.
 DNS: CDN_HOSTNAME -> FOREIGN_SERVER_IP, Cloudflare Proxy ON.
 Cloudflare: SSL/TLS = Full, Network > gRPC = ON.
-Port Foreign Tunnel: 443/TCP (Nginx). This must be free or owned by Nginx.
+CLOUDFLARE_TUNNEL_PORT: Foreign Nginx + Cloudflare edge port, normally 443/TCP.
+Set it here on FOREIGN only. Iran receives the same value in the setup code.
 Your destination application must use a different port, such as 8444.
 EOF
 }
@@ -207,8 +208,10 @@ show_client_install_guide() {
   cat <<'EOF'
 STEP 2 - IRAN SERVER
 Copy the setup code from the Foreign server.
-Port IR      = local port users connect to, e.g. 2444.
-Port Foreign = destination application port on Foreign, e.g. 8444.
+CLIENT_PORT_IR (Port IR) = port users connect to on Iran, e.g. 2444.
+SERVICE_PORT_FOREIGN (Port Foreign) = existing app port on Foreign, e.g. 8444.
+CLOUDFLARE_TUNNEL_PORT = imported from Foreign; do not enter a client port here.
+CLOUDFLARE_EDGE_IP = an IP address, not a port.
 Advanced mapping syntax: IRAN_PORT=FOREIGN_SERVICE_PORT (2444=8444).
 Users connect to IRAN_SERVER_IP:2444.
 Do not enter FOREIGN_SERVER_IP as CLEAN_CLOUDFLARE_IP.
@@ -2004,6 +2007,19 @@ collect_server_easy_values() {
 
   prompt_required "CDN hostname (example: xhttp.example.com)" DOMAIN
   DOMAIN="${DOMAIN,,}"
+  while true; do
+    prompt_default "CLOUDFLARE_TUNNEL_PORT (Foreign Nginx + Cloudflare, NOT client port)" "443" EDGE_PORT
+    validate_edge_port "$EDGE_PORT" && break
+    warn "Choose a Cloudflare TLS port: 443, 2053, 2083, 2087, 2096 or 8443."
+  done
+  EDGE_PORT=$((10#$EDGE_PORT))
+  if [[ "$EDGE_PORT" != 443 ]]; then
+    XHTTP_MODE=packet-up
+    echo "Using packet-up for the selected Cloudflare port ${EDGE_PORT}."
+  fi
+  echo "Tunnel port: ${EDGE_PORT}/TCP on Foreign Nginx and Cloudflare."
+  echo "Internal Xray port: ${ORIGIN_PORT}, private and automatic."
+  echo "Enter CLIENT_PORT_IR and SERVICE_PORT_FOREIGN later on IRAN."
   ok "All private XHTTP settings were generated automatically."
 }
 
@@ -2070,7 +2086,7 @@ collect_client_values() {
   # XHC2 carries the instance/profile itself. XHC1 keeps the operator's
   # explicitly selected name for backward compatibility.
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="${INSTANCE:-cf1}"
-    prompt_required "[3] Cloudflare IP reachable from Iran (not a server IP)" CLEAN_IP
+    prompt_required "[3] CLOUDFLARE_EDGE_IP (IPv4 address only, NOT a port or server IP)" CLEAN_IP
   prompt_default "[4] Iran listen address (0.0.0.0 accepts user connections)" "0.0.0.0" BIND_ADDRESS
   prompt_default "[5] Foreign application address (usually 127.0.0.1)" "127.0.0.1" TARGET_HOST
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
@@ -2090,12 +2106,12 @@ collect_client_values() {
 collect_simple_mappings() {
   local port_ir port_foreign protocol more raw=''
   while true; do
-    prompt_required "Port IR (users connect to this port on Iran, e.g. 2444)" port_ir
+    prompt_required "CLIENT_PORT_IR / Port IR (users connect to Iran here, e.g. 2444)" port_ir
     validate_port "$port_ir" || { warn "Port IR must be 1-65535."; continue; }
-    prompt_required "Port Foreign (application port on Foreign, e.g. 8444)" port_foreign
+    prompt_required "SERVICE_PORT_FOREIGN / Port Foreign (existing app on Foreign, e.g. 8444)" port_foreign
     validate_port "$port_foreign" || { warn "Port Foreign must be 1-65535."; continue; }
     if ((10#$port_foreign == 10#$EDGE_PORT || 10#$port_foreign == 10#$ORIGIN_PORT)); then
-      warn "Port Foreign is a tunnel listener. Use your application port instead."
+      warn "SERVICE_PORT_FOREIGN conflicts with CLOUDFLARE_TUNNEL_PORT or the internal Xray port. Enter the application port on Foreign. CLIENT_PORT_IR may be the same number as the Cloudflare port because it is on another server."
       continue
     fi
     prompt_default "Protocol (tcp/udp/both)" "tcp" protocol
@@ -2115,8 +2131,10 @@ collect_client_easy_values() {
   [[ "$setup_code" == XHC2_* ]] || INSTANCE="cf1"
   BIND_ADDRESS="0.0.0.0"
   TARGET_HOST="127.0.0.1"
-  echo "IRAN SERVER - Direct XHTTP"
-  prompt_required "Cloudflare IP reachable from Iran (not a server IP)" CLEAN_IP
+  echo "IRAN SERVER - selected client ports only; no full-server routing."
+  echo "CLOUDFLARE_TUNNEL_PORT = ${EDGE_PORT} (copied from Foreign; no re-entry)."
+  echo "XHTTP mode = ${XHTTP_MODE}. Internal Xray port = ${ORIGIN_PORT} (Foreign only)."
+  prompt_required "CLOUDFLARE_EDGE_IP (IPv4 address only, NOT a port or server IP)" CLEAN_IP
   if [[ "$TRAFFIC_SCOPE" == ports || "$TRAFFIC_SCOPE" == all ]]; then
     if ((${#MAPPING_ITEMS[@]} == 0)); then
       collect_simple_mappings
@@ -2402,6 +2420,222 @@ logo() {
   printf 'Manager %s | Xray %s\n\n' "$SCRIPT_VERSION" "$XRAY_VERSION"
 }
 
+
+# Optional radioactiveAHM/cf-scanner v1.7.0. Independent of tunnel services.
+CF_SCAN_DIR="/var/lib/xhttp-cf-scanner"
+CF_SCAN_UNIT="xhttp-cf-scanner.service"
+
+cf_scan_results() {
+  local target
+  mkdir -p "$CF_SCAN_DIR"
+  # Upstream v1.7.0 TXT columns: IPv4, ping, latency ms, jitter ms, download.
+  LC_ALL=C awk 'NF >= 4 && $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $3 ~ /^[0-9]+$/ {print}' \
+    "$CF_SCAN_DIR/result.txt" 2>/dev/null | LC_ALL=C sort -k3,3n -k4,4n > "$CF_SCAN_DIR/sorted.txt.tmp" || true
+  mv "$CF_SCAN_DIR/sorted.txt.tmp" "$CF_SCAN_DIR/sorted.txt"
+  awk '!seen[$1]++ {print $1}' "$CF_SCAN_DIR/sorted.txt" > "$CF_SCAN_DIR/ips.txt"
+  echo "Best results (IP / ping placeholder / latency ms / jitter ms / download):"
+  head -n 10 "$CF_SCAN_DIR/sorted.txt"
+  target=$(head -n 1 "$CF_SCAN_DIR/ips.txt")
+  if [[ -n "$target" ]]; then
+    echo "Sample CLOUDFLARE_EDGE_IP: $target"
+  else
+    echo "No accepted IP yet. Check scan logs or allow more time."
+  fi
+  echo "IP list TXT: $CF_SCAN_DIR/ips.txt"
+  echo "Full sorted TXT: $CF_SCAN_DIR/sorted.txt"
+  echo "Results test cp.cloudflare.com:443; verify your tunnel domain separately."
+}
+
+cf_scan_start() {
+  local tmp archive
+  if systemctl is-active --quiet "$CF_SCAN_UNIT"; then
+    warn "A scan already exists. Use Resume or Finish first."
+    return 0
+  fi
+  [[ $(uname -m) == x86_64 ]] || { warn "This pinned scanner package requires Linux x86_64."; return 0; }
+  command -v curl >/dev/null && command -v tar >/dev/null || { warn "Install curl and tar first."; return 0; }
+  mkdir -p "$CF_SCAN_DIR"
+  chmod 700 "$CF_SCAN_DIR"
+  if [[ ! -x "$CF_SCAN_DIR/cf-scanner" ]]; then
+    tmp=$(mktemp -d)
+    if ! curl -fLsS --retry 2 --connect-timeout 15 --max-time 300 \
+      https://github.com/radioactiveAHM/cf-scanner/releases/download/v1.7.0/cf-scanner_Linux_x86_64.tar.gz -o "$tmp/scanner.tgz"; then
+      rm -rf "$tmp"; warn "Scanner download failed."; return 0
+    fi
+    archive=$(tar -tzf "$tmp/scanner.tgz" | awk '$0 == "cf-scanner" || $0 == "./cf-scanner" {print; exit}')
+    if [[ -z "$archive" ]] || ! tar -xOzf "$tmp/scanner.tgz" "$archive" > "$tmp/cf-scanner"; then
+      rm -rf "$tmp"; warn "Invalid scanner archive."; return 0
+    fi
+    install -m 700 "$tmp/cf-scanner" "$CF_SCAN_DIR/cf-scanner"
+    rm -rf "$tmp"
+  fi
+  if ! curl -fLsS --retry 2 --connect-timeout 15 --max-time 60 https://www.cloudflare.com/ips-v4 -o "$CF_SCAN_DIR/ipv4.txt.tmp"; then
+    warn "Cloudflare IP ranges download failed."; return 0
+  fi
+  if ! awk 'BEGIN {ok=1} !/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ {ok=0} END {exit !(ok && NR>0)}' "$CF_SCAN_DIR/ipv4.txt.tmp"; then
+    warn "Invalid Cloudflare range list."; return 0
+  fi
+  mv "$CF_SCAN_DIR/ipv4.txt.tmp" "$CF_SCAN_DIR/ipv4.txt"
+  if [[ -f "$CF_SCAN_DIR/result.txt" ]]; then
+    mv "$CF_SCAN_DIR/result.txt" "$CF_SCAN_DIR/result-$(date +%Y%m%d-%H%M%S)-$$.txt"
+  fi
+  : > "$CF_SCAN_DIR/result.txt"
+  cat > "$CF_SCAN_DIR/conf.json" <<'CF_SCAN_CONFIG'
+{
+  "Hostname": "cp.cloudflare.com",
+  "Ports": [],
+  "Path": "/",
+  "Headers": {
+    "User-Agent": [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0)"
+    ]
+  },
+  "ResponseHeader": {
+    "Server": "cloudflare"
+  },
+  "ResponseStatusCode": [
+    200,
+    204
+  ],
+  "Ping": {
+    "Enable": false,
+    "MaxPing": 300,
+    "Privileged": true,
+    "Size": 64
+  },
+  "Goroutines": 8,
+  "Scans": 6000,
+  "Maxlatency": 1000,
+  "Jitter": {
+    "Enable": true,
+    "MaxJitter": 20.0,
+    "Samples": 5,
+    "Interval": 200
+  },
+  "IpVersion": "v4",
+  "IplistPath": "ipv4.txt",
+  "IgnoreRange": [],
+  "AllowRange": [],
+  "TLS": {
+    "Enable": true,
+    "SNI": "cp.cloudflare.com",
+    "Insecure": false,
+    "Alpn": [
+      "h2",
+      "http/1.1"
+    ],
+    "Utls": {
+      "Enable": true,
+      "Fingerprint": "firefox"
+    }
+  },
+  "HTTP/3": false,
+  "Noise": {
+    "Enable": false,
+    "Packet": "str://meow",
+    "Sleep": 500
+  },
+  "LinearScan": false,
+  "DomainScan": {
+    "Enable": false,
+    "DomainAsSNI": false,
+    "DomainAsHost": false,
+    "Shuffle": true,
+    "SkipIPV6": true,
+    "DomainListPath": "cloudfalare-domains.txt"
+  },
+  "Padding": true,
+  "PaddingSize": "1-500",
+  "CSV": false,
+  "DownloadTest": {
+    "Enable": false,
+    "SeparateConnection": false,
+    "Url": "https://speed.cloudflare.com/__down?bytes=10000000",
+    "SNI": "cp.cloudflare.com",
+    "TargetBytes": 5000000,
+    "Timeout": 5000
+  },
+  "UdpScan": {
+    "Enable": false,
+    "Packets": [
+      {
+        "payload": "base64://ATVweRyrGwyVXtU8NFbPgilDINuh2HUt4WbUdCQ/N8hbnFXND4SoNbP/JVfsOg+WcASDO5MKq9w8HWp0Azbb60kgSSaK+dc1CA0Jm1qbRRl+ukR/g68Ae7iYjR3tAXzBSU8HYLeMQ3rmx6yS7FF+bIfyXHZ5vSnbUlIDRM53Q5+YRcDoAAAAAAAAAAAAAAAAAAAAAA==",
+        "sleep": 0
+      }
+    ]
+  }
+}
+CF_SCAN_CONFIG
+  cat > /etc/systemd/system/xhttp-cf-scanner.service <<EOF
+[Unit]
+Description=Cloudflare IP scanner (optional XHTTP helper)
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$CF_SCAN_DIR
+ExecStart=$CF_SCAN_DIR/cf-scanner
+Restart=no
+Nice=10
+CPUWeight=10
+MemoryMax=512M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=$CF_SCAN_DIR
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=10
+EOF
+  systemctl daemon-reload
+  systemctl reset-failed "$CF_SCAN_UNIT" 2>/dev/null || true
+  if systemctl start "$CF_SCAN_UNIT"; then
+    ok "Scan started in background. SSH can disconnect safely."
+    echo "8 workers; 6000 samples per worker; jitter limit 20 ms; download test off."
+    echo "Not enabled at boot. Pause/Resume requires the same running process."
+  else
+    warn "Could not start scanner. Choose Show logs."
+  fi
+}
+
+cf_scan_menu() {
+  local choice
+  require_root
+  while true; do
+    echo
+    echo "Cloudflare IP scanner - run on IRAN SERVER"
+    echo "1) Start new background scan"
+    echo "2) Pause scan"
+    echo "3) Resume scan"
+    echo "4) Finish / stop scan and export TXT"
+    echo "5) Show results / export TXT"
+    echo "6) Show status and recent logs"
+    echo "7) Leave scan running / return to shell"
+    echo "0) Back"
+    IFS= read -r -p "Choose [0-7]: " choice || return 0
+    case "$choice" in
+      1) cf_scan_start ;;
+      2) if systemctl kill --kill-who=all --signal=SIGSTOP "$CF_SCAN_UNIT"; then
+           echo "Paused. Resume before reboot to keep progress."; cf_scan_results
+         else warn "No running scan to pause."; fi ;;
+      3) if systemctl kill --kill-who=all --signal=SIGCONT "$CF_SCAN_UNIT"; then
+           echo "Resumed."
+         else warn "No paused scan. Start a new scan."; fi ;;
+      4) systemctl kill --kill-who=all --signal=SIGCONT "$CF_SCAN_UNIT" 2>/dev/null || true
+         systemctl stop "$CF_SCAN_UNIT" || true
+         cf_scan_results ;;
+      5) cf_scan_results ;;
+      6) systemctl status "$CF_SCAN_UNIT" --no-pager -l || true
+         journalctl -u "$CF_SCAN_UNIT" -n 30 --no-pager || true ;;
+      7) echo "Returning to shell. Running scans continue; paused scans stay paused."
+         echo "You can type exit in your SSH shell to disconnect."
+         exit 0 ;;
+      0) return 0 ;;
+      *) warn "Choose a number from 0 to 7." ;;
+    esac
+  done
+}
+
 main_menu() {
   local choice
   while true; do
@@ -2412,29 +2646,31 @@ main_menu() {
     echo "2) IRAN SERVER    - Connect using Foreign setup code"
     echo "3) FOREIGN SERVER - Show Iran setup code again"
     echo "4) Status"
-    echo "5) Diagnose connection / show logs"
+    echo "5) Cloudflare IP scanner (Iran)"
     echo "6) Restart an XHTTP service"
     echo "7) Remove an XHTTP installation"
     echo "8) Advanced settings (Foreign)"
     echo "9) Update Xray core"
     echo "10) Update this manager"
     echo "11) Setup guide"
+    echo "12) Diagnose connection / show logs"
     echo "0) Exit"
-    IFS= read -r -p "Choose [0-11]: " choice || return 0
+    IFS= read -r -p "Choose [0-12]: " choice || return 0
     case "$choice" in
       1) install_server_interactive; pause_menu ;;
       2) install_peer_menu_interactive; pause_menu ;;
       3) show_iran_command_interactive; pause_menu ;;
       4) list_instances; pause_menu ;;
-      5) diagnose_instance; pause_menu ;;
+      5) cf_scan_menu ;;
       6) restart_instance; pause_menu ;;
       7) remove_instance_interactive; pause_menu ;;
       8) install_server_advanced_interactive; pause_menu ;;
       9) update_core; pause_menu ;;
       10) update_manager; pause_menu ;;
       11) show_simple_guide; cloudflare_checklist; pause_menu ;;
+      12) diagnose_instance; pause_menu ;;
       0|q|quit|exit) return 0 ;;
-      *) warn "Choose a number from 0 to 11." ;;
+      *) warn "Choose a number from 0 to 12." ;;
     esac
   done
 }
@@ -2449,6 +2685,7 @@ Run Foreign setup first, then Iran setup. Direct connections use Cloudflare.
   xhttp-cdn-manager iran-peer       Set up IRAN SERVER with Foreign code
   xhttp-cdn-manager iran-command    Show Iran setup code on Foreign
   xhttp-cdn-manager easy-client     Install Iran using the copied command
+  xhttp-cdn-manager scanner         Cloudflare IP scanner menu
   xhttp-cdn-manager status          List XHTTP services
   xhttp-cdn-manager diagnose        Check connection and recent logs
   xhttp-cdn-manager restart         Restart one XHTTP service
@@ -2471,6 +2708,7 @@ main() {
   local command="${1:-menu}" setup_code
   case "$command" in
     menu) require_root; main_menu ;;
+    scanner) cf_scan_menu ;;
     status) require_root; list_instances ;;
     diagnose) require_root; diagnose_instance ;;
     restart) require_root; restart_instance ;;
