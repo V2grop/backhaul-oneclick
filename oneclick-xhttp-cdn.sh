@@ -2646,14 +2646,14 @@ main_menu() {
     echo "2) IRAN SERVER    - Connect using Foreign setup code"
     echo "3) FOREIGN SERVER - Show Iran setup code again"
     echo "4) Status"
-    echo "5) Diagnose connection / show logs"
+    echo "5) Cloudflare IP scanner (Iran)"
     echo "6) Restart an XHTTP service"
     echo "7) Remove an XHTTP installation"
     echo "8) Advanced settings (Foreign)"
     echo "9) Update Xray core"
     echo "10) Update this manager"
     echo "11) Setup guide"
-    echo "12) Cloudflare IP scanner (Iran)"
+    echo "12) Diagnose connection / show logs"
     echo "0) Exit"
     IFS= read -r -p "Choose [0-12]: " choice || return 0
     case "$choice" in
@@ -2661,14 +2661,14 @@ main_menu() {
       2) install_peer_menu_interactive; pause_menu ;;
       3) show_iran_command_interactive; pause_menu ;;
       4) list_instances; pause_menu ;;
-      5) diagnose_instance; pause_menu ;;
+      5) cf_scan_menu ;;
       6) restart_instance; pause_menu ;;
       7) remove_instance_interactive; pause_menu ;;
       8) install_server_advanced_interactive; pause_menu ;;
       9) update_core; pause_menu ;;
       10) update_manager; pause_menu ;;
       11) show_simple_guide; cloudflare_checklist; pause_menu ;;
-      12) cf_scan_menu ;;
+      12) diagnose_instance; pause_menu ;;
       0|q|quit|exit) return 0 ;;
       *) warn "Choose a number from 0 to 12." ;;
     esac
