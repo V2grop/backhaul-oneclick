@@ -5,7 +5,7 @@ umask 027
 # Universal launcher only. Each tunnel engine keeps its own files and services.
 SCRIPT_VERSION="1.3.0"
 V2QUANTUM_MANAGER_REVISION="0.3.2"
-XHTTP_CDN_MANAGER_REVISION="2.1.0"
+XHTTP_CDN_MANAGER_REVISION="3.0.1"
 REPO="${TUNNEL_MANAGER_REPO:-V2grop/backhaul-oneclick}"
 REF="${TUNNEL_MANAGER_REF:-main}"
 RAW_BASE="${TUNNEL_MANAGER_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
@@ -59,7 +59,6 @@ Usage:
   tunnel-manager --v2quantum         Independent TCP/Quantum/Raw manager
   tunnel-manager --tun               Independent encrypted layer-3 TUN manager
   tunnel-manager --xhttp-cdn         Independent CDN XHTTP/Clean-IP manager
-  tunnel-manager --xhttp-reverse     Easy reverse XHTTP endpoint shortcut
   tunnel-manager --realm             Realm TCP/UDP port forward manager
   tunnel-manager --status            Unified service diagnostics
   tunnel-manager --capabilities      Show engines and limitations
@@ -101,7 +100,7 @@ capabilities() {
    Optional direct layer-4 TCP/UDP port forwarding.
 
 5) XHTTP CDN (independent official Xray core)
-   Direct or reverse endpoint/peer tunnel through Cloudflare XHTTP. Profiles
+   Direct Iran-to-Foreign tunnel through Cloudflare XHTTP. Profiles
    are TCP/UDP/both port mappings, private SOCKS, full IPv4 TUN, or all at
    once. Native XHTTP XMUX, clean-edge dialing, preflight validation,
    watchdog recovery and rollback are included. Existing Xray, X-UI,
@@ -203,8 +202,8 @@ run_xwsmux_max() {
 run_xhttp_cdn() {
   local script
   echo
-  printf '%sXHTTP CDN / KHAREJ + IRAN Endpoint/Peer manager%s\n' "$cyan" "$reset"
-  echo "Direct: KHAREJ endpoint -> IRAN peer | Reverse: IRAN endpoint -> KHAREJ peer"
+  printf '%sXHTTP Direct / Foreign + Iran%s\n' "$cyan" "$reset"
+  echo "Step 1: FOREIGN SERVER setup | Step 2: IRAN SERVER connection"
   echo "Independent Xray core, configs and services; existing transports are preserved."
   echo
   if [[ -x "$XHTTP_CDN_MANAGER_COMMAND" ]] && \
@@ -386,11 +385,10 @@ menu() {
     echo "5) Install/update tunnel-manager shortcut"
     echo "6) Remove only the launcher shortcut"
     echo "7) Capabilities and important limitations"
-    echo "8) XHTTP CDN - KHAREJ/IRAN direct + reverse (ports/SOCKS/TUN/all)"
-    echo "9) XHTTP - IRAN reverse endpoint shortcut"
+    echo "8) XHTTP Direct - Foreign setup / Iran setup"
     echo "0) Exit"
     echo
-    IFS= read -r -p "Choose [0-9]: " choice
+    IFS= read -r -p "Choose [0-8]: " choice
     case "${choice,,}" in
       1|backhaul) backhaul_menu ;;
       2|v2quantum|quantum) run_v2quantum || warn "V2Quantum manager exited with an error."; pause_menu ;;
@@ -400,7 +398,6 @@ menu() {
       6|remove|uninstall) remove_shortcut; pause_menu ;;
       7|info|capabilities) capabilities; pause_menu ;;
       8|xhttp|xhttp-cdn|cdn) run_xhttp_cdn || warn "XHTTP CDN manager exited with an error."; pause_menu ;;
-      9|xhttp-reverse|reverse) run_xhttp_cdn reverse-server || warn "XHTTP reverse manager exited with an error."; pause_menu ;;
       0|q|quit|exit) exit 0 ;;
       *) warn "Invalid selection."; sleep 1 ;;
     esac
@@ -414,7 +411,6 @@ while (( $# > 0 )); do
     --v2quantum) ACTION="v2quantum" ;;
     --tun) ACTION="tun" ;;
     --xhttp-cdn) ACTION="xhttp-cdn" ;;
-    --xhttp-reverse) ACTION="xhttp-reverse" ;;
     --realm) ACTION="realm" ;;
     --status) ACTION="status" ;;
     --capabilities) ACTION="capabilities" ;;
@@ -437,7 +433,6 @@ case "$ACTION" in
   v2quantum) run_v2quantum ;;
   tun) run_v2tun ;;
   xhttp-cdn) run_xhttp_cdn ;;
-  xhttp-reverse) run_xhttp_cdn reverse-server ;;
   realm) run_realm ;;
   status) show_status ;;
   capabilities) capabilities ;;

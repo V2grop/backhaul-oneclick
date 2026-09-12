@@ -61,7 +61,7 @@ validate_cloudflare_token 0123456789abcdef0123456789abcdef01234567 || fail 'Vali
 
 show_server_install_guide >"$TEST_DIR/server-guide.txt"
 grep -Fq 'FOREIGN_SERVER_IP' "$TEST_DIR/server-guide.txt" || fail 'Foreign guide does not label the foreign IP.'
-grep -Fq 'Enter only CDN_HOSTNAME.' "$TEST_DIR/server-guide.txt" || fail 'Easy foreign guide does not describe its single input.'
+grep -Fq 'Enter CDN_HOSTNAME, then CLOUDFLARE_TUNNEL_PORT' "$TEST_DIR/server-guide.txt" || fail 'Easy foreign guide does not describe its single input.'
 show_client_install_guide >"$TEST_DIR/client-guide.txt"
 grep -Fq 'IRAN_PORT=FOREIGN_SERVICE_PORT' "$TEST_DIR/client-guide.txt" || fail 'Iran guide does not explain the mapping direction.'
 grep -Fq 'Do not enter FOREIGN_SERVER_IP as CLEAN_CLOUDFLARE_IP.' "$TEST_DIR/client-guide.txt" || fail 'Iran guide does not distinguish the clean IP.'
@@ -101,7 +101,7 @@ parse_setup_code "$code" || fail 'Generated setup code could not be parsed.'
 ! parse_setup_code 'XHC1_broken' || fail 'Damaged setup code accepted.'
 
 (
-  collect_client_easy_values "$code" <<< $'104.16.1.1\n2444=8444,2083=2083\n'
+  collect_client_easy_values "$code" <<< $'104.16.1.1\n2444\n8444\ntcp\ny\n2083\n2083\ntcp\nn\n'
   [[ "$INSTANCE" == cf1 ]] || fail 'Easy Iran workflow did not select the default instance.'
   [[ "$CLEAN_IP" == 104.16.1.1 ]] || fail 'Easy Iran workflow did not accept the clean IP.'
   [[ "$BIND_ADDRESS" == 0.0.0.0 ]] || fail 'Easy Iran workflow did not use the public bind default.'
@@ -186,17 +186,15 @@ extracted_code="$(extract_setup_code "XHTTP_CDN_SETUP_CODE=${code} bash <(curl e
 [[ "$(extract_setup_code "$code")" == "$code" ]] || fail 'Bare pairing code was not accepted.'
 ! extract_setup_code 'echo no-pairing-code-here' || fail 'Random command was accepted as a pairing code.'
 
-# The interactive XHTTP menu must put the two roles next to the action they
-# need: direct KHAREJ -> IRAN and reverse IRAN -> KHAREJ.
+# The menu is English and Direct only.
 (
   SKIP_ROOT_CHECK=1
   printf '0\n' | main_menu >"$TEST_DIR/role-menu.txt"
-  grep -Fq '1) KHAREJ / خارج' "$TEST_DIR/role-menu.txt" || fail 'KHAREJ direct option is not labelled.'
-  grep -Fq '2) IRAN / ایران' "$TEST_DIR/role-menu.txt" || fail 'IRAN direct peer option is not labelled.'
-  grep -Fq '4) IRAN / ایران' "$TEST_DIR/role-menu.txt" || fail 'IRAN reverse endpoint option is not labelled.'
-  grep -Fq '5) KHAREJ / خارج' "$TEST_DIR/role-menu.txt" || fail 'KHAREJ reverse peer option is not labelled.'
-  grep -Fq 'DIRECT / مستقیم:  1) KHAREJ endpoint  ->  2) IRAN peer' "$TEST_DIR/role-menu.txt" \
-    || fail 'Direct role flow is not shown.'
+  grep -Fq '1) FOREIGN SERVER' "$TEST_DIR/role-menu.txt" || fail 'Foreign setup missing.'
+  grep -Fq '2) IRAN SERVER' "$TEST_DIR/role-menu.txt" || fail 'Iran setup missing.'
+  ! grep -iq reverse "$TEST_DIR/role-menu.txt" || fail 'Reverse still advertised.'
+  LC_ALL=C grep -n '[^ -~]' "$MANAGER" && fail 'Manager must contain ASCII only.'
+  true
 )
 
 # With a single installation, deletion must auto-select it and require no role
@@ -307,14 +305,14 @@ validate_edge_port 8443 || fail 'Cloudflare alternate edge port rejected.'
 ALLOW_CUSTOM_EDGE_PORT=1
 validate_edge_port 80 || fail 'Custom edge port override rejected.'
 ALLOW_CUSTOM_EDGE_PORT=0
-validate_direction reverse || fail 'Reverse direction rejected.'
+! validate_direction reverse || fail 'Reverse direction accepted.'
 validate_scope all || fail 'All traffic scope rejected.'
 validate_tun_name xhttp0 || fail 'Valid TUN name rejected.'
 ! validate_tun_name 0bad || fail 'Invalid TUN name accepted.'
 validate_tun_gateway 172.30.0.1/30 || fail 'Valid TUN gateway rejected.'
 validate_dns_list '1.1.1.1,8.8.8.8' || fail 'Valid DNS list rejected.'
 
-# Full XHC2 pairing round-trip, including reverse direction and every profile
+# Full XHC2 pairing round-trip, including Direct direction and every profile
 # field. The code is deliberately opaque so UUID/path values are not printed
 # into the normal prompts.
 INSTANCE=rev1
@@ -323,7 +321,8 @@ UUID=123e4567-e89b-12d3-a456-426614174000
 XHTTP_PATH=/xhttp-abcdef123456
 XHTTP_MODE=auto
 EDGE_PORT=8443
-TUNNEL_DIRECTION=reverse
+XHTTP_MODE=packet-up
+TUNNEL_DIRECTION=direct
 TRAFFIC_SCOPE=all
 ORIGIN_PORT=18080
 SOCKS_PORT=10808
@@ -337,7 +336,7 @@ xhc2_code="$(make_setup_code_v2)"
 [[ "$xhc2_code" == XHC2_* ]] || fail 'XHC2 prefix is missing.'
 DOMAIN=''; UUID=''; XHTTP_PATH=''; EDGE_PORT=''; TUNNEL_DIRECTION=''; TRAFFIC_SCOPE=''
 parse_setup_code "$xhc2_code" || fail 'XHC2 setup code could not be parsed.'
-[[ "$INSTANCE" == rev1 && "$TUNNEL_DIRECTION" == reverse && "$TRAFFIC_SCOPE" == all ]] \
+[[ "$INSTANCE" == rev1 && "$TUNNEL_DIRECTION" == direct && "$TRAFFIC_SCOPE" == all ]] \
   || fail 'XHC2 direction/profile mismatch.'
 [[ "$EDGE_PORT" == 8443 && "$SOCKS_PORT" == 10808 && "$TUN_NAME" == xhttp0 ]] \
   || fail 'XHC2 optional settings mismatch.'
@@ -384,6 +383,7 @@ grep -Fq 'OnUnitActiveSec=60s' "$SYSTEMD_DIR/xhttp-cdn-client-rev1-watchdog.time
 grep -Fq 'systemctl restart xhttp-cdn-client-rev1.service' "$SYSTEMD_DIR/xhttp-cdn-client-rev1-watchdog.service" || fail 'Watchdog restart action is missing.'
 
 EDGE_PORT=443
+XHTTP_MODE=auto
 TLS_CERT=/etc/ssl/cloudflare/cdn.example.com.pem
 TLS_KEY=/etc/ssl/cloudflare/cdn.example.com.key
 write_nginx_config "$TEST_DIR/nginx-buffering.conf"

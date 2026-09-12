@@ -1,0 +1,40 @@
+name: XHTTP Direct
+on:
+  pull_request:
+    paths: ['oneclick-xhttp-cdn.sh', 'oneclick-universal.sh', 'tests/test-xhttp*', '.github/workflows/xhttp-ci.yml']
+  push:
+    paths: ['oneclick-xhttp-cdn.sh', 'oneclick-universal.sh', 'tests/test-xhttp*', '.github/workflows/xhttp-ci.yml']
+permissions:
+  contents: read
+jobs:
+  direct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y nginx jq openssl unzip
+      - name: Download and verify pinned Xray
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./oneclick-xhttp-cdn.sh
+          base="https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION"
+          curl -fsSL --retry 3 "$base/Xray-linux-64.zip" -o /tmp/xray.zip
+          curl -fsSL --retry 3 "$base/Xray-linux-64.zip.dgst" -o /tmp/xray.dgst
+          digest="$(awk -F'= ' '$1 == "SHA2-256" {print $2}' /tmp/xray.dgst)"
+          [[ "$digest" =~ ^[0-9a-fA-F]{64}$ ]]
+          printf '%s  /tmp/xray.zip\n' "$digest" | sha256sum -c -
+          unzip -p /tmp/xray.zip xray > /tmp/xray-test
+          chmod +x /tmp/xray-test
+      - name: Configuration, regression and launcher tests
+        env:
+          XRAY_TEST_BIN: /tmp/xray-test
+        run: |
+          bash tests/test-xhttp-cdn.sh
+          bash tests/test-xhttp-direct.sh
+          bash v2quantum-go/tests/test-universal.sh
+      - name: Real Xray and Nginx TCP/UDP integration
+        env:
+          XRAY_TEST_BIN: /tmp/xray-test
+          NGINX_TEST_BIN: /usr/sbin/nginx
+        run: python3 tests/test-xhttp-integration.py
