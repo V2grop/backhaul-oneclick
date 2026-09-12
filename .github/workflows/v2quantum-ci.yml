@@ -1,0 +1,56 @@
+name: V2Quantum CI
+
+on:
+  pull_request:
+    paths:
+      - "v2quantum-go/**"
+      - "v2quantum-oneclick.sh"
+      - "oneclick-universal.sh"
+      - "oneclick-v3-en.sh"
+      - "oneclick-xwsmux-max.sh"
+      - "tests/test-xwsmux-max.sh"
+      - "tests/test-backhaul-wrapper.sh"
+      - ".github/workflows/v2quantum-*.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "v2quantum-go/**"
+      - "v2quantum-oneclick.sh"
+      - "oneclick-universal.sh"
+      - "oneclick-v3-en.sh"
+      - "oneclick-xwsmux-max.sh"
+      - "tests/test-xwsmux-max.sh"
+      - "tests/test-backhaul-wrapper.sh"
+      - ".github/workflows/v2quantum-*.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2quantum-go
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: v2quantum-go/go.mod
+
+      - name: Static checks and tests
+        run: make check
+
+      - name: Race detector
+        run: make race
+
+      - name: Verify release payload
+        run: |
+          make release VERSION=0.3.0
+          cd dist
+          sha256sum -c SHA256SUMS

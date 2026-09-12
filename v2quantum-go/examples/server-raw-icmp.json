@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "role": "server",
+  "node_name": "iran-raw",
+  "carrier": {
+    "mode": "raw_icmp",
+    "pool": 1,
+    "keepalive_seconds": 10,
+    "dial_timeout_seconds": 8,
+    "reconnect_min_millis": 500,
+    "reconnect_max_millis": 15000,
+    "max_streams_per_session": 256,
+    "raw": {
+      "local_ip": "192.0.2.10",
+      "peer_ip": "198.51.100.20",
+      "expected_peer_source_ip": "198.51.100.20",
+      "interface": "eth0",
+      "icmp_identifier": 22066,
+      "payload_mtu": 1200,
+      "experimental_enabled": true,
+      "allow_unrouted_spoof": false
+    }
+  },
+  "security": {
+    "psk_env": "V2QUANTUM_PSK"
+  },
+  "mappings": [
+    {
+      "name": "vless",
+      "protocol": "tcp",
+      "listen": "0.0.0.0:2444"
+    }
+  ],
+  "health": {
+    "listen": "127.0.0.1:9090",
+    "allow_public_listen": false
+  },
+  "logging": {
+    "level": "info",
+    "json": false
+  }
+}

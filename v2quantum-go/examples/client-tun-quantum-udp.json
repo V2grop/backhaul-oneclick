@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "role": "client",
+  "node_name": "outside-tun-example",
+  "carrier": {
+    "mode": "quantum_udp",
+    "server": "IRAN_IP:8900",
+    "pool": 1,
+    "keepalive_seconds": 8,
+    "dial_timeout_seconds": 6,
+    "reconnect_min_millis": 300,
+    "reconnect_max_millis": 10000,
+    "max_streams_per_session": 512,
+    "quantum": {"profile": "balanced", "auto_tune": true}
+  },
+  "security": {"psk_env": "V2QUANTUM_PSK"},
+  "mappings": [],
+  "tun": {
+    "enabled": true,
+    "name": "v2qtun0",
+    "local_address": "10.77.0.2/30",
+    "peer_address": "10.77.0.1",
+    "mtu": 1280,
+    "routes": []
+  },
+  "health": {"listen": "127.0.0.1:19090", "allow_public_listen": false},
+  "logging": {"level": "info", "json": false}
+}
